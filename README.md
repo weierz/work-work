@@ -1,31 +1,64 @@
 # Work Work
 
-一个面向 macOS 的 Rust 命令行工具。它从 `pmset -g log` 中读取屏幕亮起事件，估算当天的大致打卡时间和下班时间，并把结果保存为每日 JSON 记录。
+**A tiny macOS helper that estimates when your workday ends.**
 
-安装一次后，工具通过两个独立的 macOS launchd 任务自动工作：每天只计算并写入一次记录；提醒检查不会重新计算或覆盖当天记录。
+Work Work reads local display-wake events from macOS, keeps one lightweight record per day, and sends a notification when it is almost time to wrap up.
 
-## 默认规则
+```console
+$ ww
+18:11:27
+```
 
-候选事件限定在 `05:00–14:00`，从中选择距离 `09:00` 最近的一次 `Display is turned on`：
+No account, server, or manual check-in is required. Everything stays on your Mac.
 
-| 亮屏时间 | 预计下班时间 |
+## What it does
+
+1. Reads `Display is turned on` events from `pmset -g log`.
+2. Selects the event closest to your configured start time.
+3. Applies your schedule rules to estimate an end time.
+4. Saves one local JSON record for the day.
+5. Sends one macOS notification before the estimated end time.
+
+By default, Work Work records the day at `14:05` and sends a notification 10 minutes before the estimated end time.
+
+> [!NOTE]
+> Work Work provides a convenient estimate. It is not an attendance system or an authoritative time tracker.
+
+## Default schedule
+
+The default search window is `05:00–14:00`. Within that window, Work Work selects the display-wake event closest to `09:00`.
+
+| Selected wake time | Estimated end time |
 | --- | --- |
-| 10:00 之前 | 亮屏时间 + 9 小时 |
+| Before 10:00 | Wake time + 9 hours |
 | 10:00–13:00 | 18:00 |
-| 13:00–14:00 | 18:00 + 超过 13:00 的时长 |
-| 任意规则结果 | 最晚不超过 19:00 |
+| 13:00–14:00 | 18:00 plus the time after 13:00 |
+| Any calculated result | Never later than 19:00 |
 
-例如：`09:11 → 18:11`、`10:30 → 18:00`、`13:20 → 18:20`、`14:00 → 19:00`。
+Examples:
 
-## 安装
+| Wake | End |
+| --- | --- |
+| 09:11 | 18:11 |
+| 10:30 | 18:00 |
+| 13:20 | 18:20 |
+| 14:00 | 19:00 |
 
-需要 macOS 和 Rust 工具链。使用 curl 一键完成下载、编译、配置和自动启动：
+Every part of this schedule can be changed in the configuration file.
+
+## Installation
+
+Work Work requires macOS and a Rust toolchain.
+
+### One-line installer
+
+The installer downloads the project, builds `ww`, creates the default configuration, and enables automatic recording and notifications:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/weierz/work-work/main/install.sh | zsh
 ```
 
-也可以从克隆的仓库安装：
+### From a clone
 
 ```bash
 git clone https://github.com/weierz/work-work.git
@@ -33,82 +66,75 @@ cd work-work
 ./install.sh
 ```
 
-安装脚本会完成编译、安装并立即加载两个用户级 LaunchAgent。用户不需要再执行启动命令，也不需要管理员权限。
+The installer uses user-level LaunchAgents and does not require administrator privileges.
 
 ### Homebrew
-
-通过 Homebrew tap 安装并启动服务：
 
 ```bash
 brew install weierz/tap/work-work && brew services start weierz/tap/work-work
 ```
 
-Homebrew 使用一个常驻的轻量服务读取同一份配置：每天只生成一次记录，并自动完成下班提醒。停止和卸载：
+To stop and remove the Homebrew installation:
 
 ```bash
 brew services stop weierz/tap/work-work
 brew uninstall weierz/tap/work-work
 ```
 
-## 日常使用
+## Everyday use
 
-安装完成后不需要手动执行 `record` 或 `remind`：
-
-- 默认每天 `14:05` 自动读取一次亮屏日志并保存记录。
-- 每 60 秒进行一次轻量提醒检查，默认在下班前 10 分钟发送一次 macOS 通知。
-- 登录或电脑从关机状态恢复时，如果已经超过当天记录时间，会补做当天记录。
-- 同一天已有记录时不会覆盖，除非明确使用 `--force`。
-
-查看记录：
+Once installed, Work Work records and reminds you automatically. You only need the CLI when you want to check something.
 
 ```bash
-ww                  # 只输出今天的预计下班时间，例如 18:11:27
-ww status
-ww history
-ww history 30
+ww              # Print only today's estimated end time
+ww status       # Show today's full record
+ww history      # Show the latest 14 records
+ww history 30   # Show the latest 30 records
 ```
 
-卸载自动任务，但保留配置和历史记录：
+Useful maintenance commands:
 
 ```bash
-ww uninstall
-```
-
-以下命令只用于调试或手动修正：
-
-```bash
-ww record           # 如果今天没有记录，则立即记录
-ww record --force   # 强制重新计算今天的记录
-ww remind           # 立即检查提醒状态
-ww init             # 创建默认配置
+ww record           # Create today's record if it does not exist
+ww record --force   # Recalculate today's record
+ww remind           # Check the reminder immediately
+ww init              # Create the default configuration
+ww install           # Reload source-install automation after config changes
+ww uninstall         # Remove source-install automation, keeping config and data
 ww help
 ```
 
-## 配置
+## Configuration
 
-安装时会自动创建（也可通过 `init` 或 `record` 创建）：
+The default configuration is created at:
 
 ```text
 ~/.config/work-work/config.toml
 ```
 
-完整示例见 [`config.example.toml`](config.example.toml)。主要配置项：
+See [`config.example.toml`](config.example.toml) for the complete example.
 
-- `search.target_time`：选择亮屏事件时的目标时间。
-- `search.start_time` / `search.end_time`：候选事件时间窗。
-- `schedule.max_end_time`：最晚下班时间。
-- `schedule.reminder_minutes`：提前多少分钟提醒。
-- `schedule.rules`：按顺序匹配的下班时间规则。
-- `automation.daily_record_time`：每天自动记录时间，应晚于候选时间窗。
-- `automation.reminder_check_seconds`：提醒检查间隔，最小 30 秒。
+| Setting | Purpose | Default |
+| --- | --- | --- |
+| `search.target_time` | Preferred start time used to rank wake events | `09:00:00` |
+| `search.start_time` | Start of the wake-event search window | `05:00:00` |
+| `search.end_time` | End of the wake-event search window | `14:00:00` |
+| `schedule.max_end_time` | Latest allowed estimated end time | `19:00:00` |
+| `schedule.reminder_minutes` | Minutes before the end time to notify | `10` |
+| `automation.daily_record_time` | Time to create the daily record | `14:05:00` |
+| `automation.reminder_check_seconds` | Reminder check interval | `60` |
 
-支持三种规则：
+### Schedule rules
 
-- `add_duration`：在亮屏时间上增加指定分钟数。
-- `fixed`：使用固定下班时间。
-- `carry_delay`：把超过锚点的时长加到另一个锚点上。
+Rules are evaluated from top to bottom. The first rule whose `until` value includes the selected wake time is used.
 
-例如，`13:20 → 18:20` 对应：
+Available rule types:
+
+- `add_duration`: add a number of minutes to the wake time.
+- `fixed`: use a fixed end time.
+- `carry_delay`: add the delay after one anchor to another anchor.
+
+For example, this rule turns `13:20` into `18:20`:
 
 ```toml
 [[schedule.rules]]
@@ -118,30 +144,30 @@ anchor_start = "13:00:00"
 anchor_end = "18:00:00"
 ```
 
-规则按配置中的顺序执行，第一条满足 `wake_time <= until` 的规则生效。
-
-修改自动化时间或检查间隔后，重新执行一次：
+After changing an automation time or interval for a source installation, reload the LaunchAgents:
 
 ```bash
 ww install
 ```
 
-## 数据
+## Data and privacy
 
-每日记录保存在：
+Work Work only reads local macOS power-management logs. It does not send your activity or records anywhere.
+
+Daily records:
 
 ```text
 ~/.local/share/work-work/records/YYYY-MM-DD.json
 ```
 
-后台任务日志位于：
+Background logs:
 
 ```text
 ~/.local/share/work-work/work-work.log
 ~/.local/share/work-work/work-work.error.log
 ```
 
-示例：
+Example record:
 
 ```json
 {
@@ -155,14 +181,28 @@ ww install
 }
 ```
 
-可用以下环境变量临时改写路径，便于测试或脚本集成：
+For scripts and temporary environments, the default paths can be overridden:
 
 ```bash
 WW_CONFIG=/path/to/config.toml
 WW_DATA_DIR=/path/to/records
 ```
 
-## 开发
+## Troubleshooting
+
+If no notification appears, make sure macOS allows `osascript` notifications and inspect:
+
+```text
+~/.local/share/work-work/work-work.error.log
+```
+
+If the estimated time looks wrong, inspect the wake events for today and adjust the search window or target time:
+
+```bash
+pmset -g log | grep "$(date +%Y-%m-%d).*Display is turned on"
+```
+
+## Development
 
 ```bash
 cargo fmt --all -- --check
@@ -170,12 +210,12 @@ cargo check --locked
 cargo test --locked
 ```
 
-## 限制
+## Requirements and limitations
 
-- 只支持 macOS，因为数据来自系统自带的 `pmset`。
-- 亮屏时间只是近似打卡时间，不等同于考勤系统记录。
-- macOS 可能产生短暂的自动亮屏事件，因此需要合理设置候选时间窗和目标时间。
-- macOS 必须允许 `osascript` 发送通知，否则提醒记录不会标记为已发送。
+- macOS only; Work Work relies on the built-in `pmset` command.
+- Display-wake events are an approximation of when work began.
+- Short automatic wake events can occur, so the search window and target time matter.
+- Notifications require permission for `osascript` to post notifications.
 
 ## License
 
