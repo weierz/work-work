@@ -19,7 +19,13 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let args = env::args().collect::<Vec<_>>();
-    let command = args.get(1).map(String::as_str).unwrap_or("status");
+    let Some(command) = args.get(1).map(String::as_str) else {
+        let today = Local::now().date_naive();
+        let record = load_record(today)?
+            .ok_or_else(|| format!("no record for {today}; automatic recording has not run yet"))?;
+        println!("{}", record.estimated_end_time.format("%H:%M:%S"));
+        return Ok(());
+    };
     match command {
         "init" => {
             let path = ensure_default_config()?;
@@ -122,6 +128,7 @@ fn print_help() {
     println!(
         "ww — estimate clock-out time from macOS display wake events\n\n\
          Usage:\n  \
+         ww                Print only today's estimated end time\n  \
          ww init           Create the default config\n  \
          ww install        Enable automatic daily recording and reminders\n  \
          ww uninstall      Disable automation and keep config/history\n  \

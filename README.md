@@ -55,13 +55,14 @@ brew uninstall weierz/tap/work-work
 安装完成后不需要手动执行 `record` 或 `remind`：
 
 - 默认每天 `14:05` 自动读取一次亮屏日志并保存记录。
-- 每 60 秒进行一次轻量提醒检查，只在配置的提醒窗口内发送一次通知。
+- 每 60 秒进行一次轻量提醒检查，默认在下班前 10 分钟发送一次 macOS 通知。
 - 登录或电脑从关机状态恢复时，如果已经超过当天记录时间，会补做当天记录。
 - 同一天已有记录时不会覆盖，除非明确使用 `--force`。
 
 查看记录：
 
 ```bash
+ww                  # 只输出今天的预计下班时间，例如 18:11:27
 ww status
 ww history
 ww history 30
@@ -148,7 +149,7 @@ ww install
   "wake_time": "09:11:27",
   "estimated_end_time": "18:11:27",
   "source": "pmset: Display is turned on",
-  "reminder_minutes": 30,
+  "reminder_minutes": 10,
   "reminder_sent": false,
   "reminder_sent_at": null
 }
