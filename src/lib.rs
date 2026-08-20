@@ -155,8 +155,8 @@ fn validate_config(config: &Config) -> Result<(), String> {
     if config.schedule.rules.is_empty() {
         return Err("schedule.rules must contain at least one rule".into());
     }
-    if config.schedule.reminder_minutes < 0 {
-        return Err("schedule.reminder_minutes must be non-negative".into());
+    if config.schedule.reminder_minutes < 1 {
+        return Err("schedule.reminder_minutes must be at least 1".into());
     }
     if config.automation.daily_record_time < config.search.end_time {
         return Err("automation.daily_record_time must not be before search.end_time".into());
@@ -696,6 +696,11 @@ mod tests {
     }
 
     #[test]
+    fn default_config_reminds_ten_minutes_before_end_time() {
+        assert_eq!(config().schedule.reminder_minutes, 10);
+    }
+
+    #[test]
     fn scheduled_record_only_runs_after_the_configured_time() {
         let config = config();
         assert!(!scheduled_record_is_due(
@@ -751,12 +756,12 @@ mod tests {
             wake_time: parse_time("09:00").unwrap(),
             estimated_end_time: parse_time("18:00").unwrap(),
             source: "test".into(),
-            reminder_minutes: 30,
+            reminder_minutes: 10,
             reminder_sent: false,
             reminder_sent_at: None,
         };
-        assert!(!should_remind(&record, parse_time("17:29").unwrap()));
-        assert!(should_remind(&record, parse_time("17:30").unwrap()));
+        assert!(!should_remind(&record, parse_time("17:49").unwrap()));
+        assert!(should_remind(&record, parse_time("17:50").unwrap()));
         assert!(!should_remind(&record, parse_time("18:00").unwrap()));
     }
 

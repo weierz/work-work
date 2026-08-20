@@ -8,7 +8,7 @@ end_time = "14:00:00"
 
 [schedule]
 max_end_time = "19:00:00"
-reminder_minutes = 30
+reminder_minutes = 10
 
 # Rules are evaluated from top to bottom. The first matching `until` wins.
 [[schedule.rules]]
