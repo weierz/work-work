@@ -2,9 +2,10 @@ use chrono::Local;
 use std::env;
 use std::process::ExitCode;
 use work_work::{
-    ReminderOutcome, ensure_default_config, install_automation, list_records, load_config,
-    load_record, record_today, remind_today, run_daemon, scheduled_record_is_due,
-    uninstall_automation,
+    MonthlyReport, ReminderOutcome, ensure_default_config, format_minutes, format_signed_minutes,
+    generate_monthly_report, install_automation, list_records, load_config, load_record,
+    parse_month, previous_month, record_today, remind_today, run_automation_tick, run_daemon,
+    scheduled_record_is_due, uninstall_automation,
 };
 
 fn main() -> ExitCode {
@@ -79,10 +80,17 @@ fn run() -> Result<(), String> {
                 .unwrap_or(14);
             for record in list_records(limit)? {
                 println!(
-                    "{}  wake {}  end {}{}",
+                    "{}  on {}  off {}  worked {}{}",
                     record.date,
                     record.wake_time.format("%H:%M:%S"),
-                    record.estimated_end_time.format("%H:%M:%S"),
+                    record
+                        .display_off_time
+                        .map(|time| time.format("%H:%M:%S").to_string())
+                        .unwrap_or_else(|| "--".into()),
+                    record
+                        .work_minutes
+                        .map(format_minutes)
+                        .unwrap_or_else(|| "--".into()),
                     if record.reminder_sent {
                         "  reminded"
                     } else {
@@ -91,6 +99,16 @@ fn run() -> Result<(), String> {
                 );
             }
         }
+        "month" => {
+            let config = load_config()?;
+            let month = args
+                .get(2)
+                .map(|value| parse_month(value))
+                .transpose()?
+                .unwrap_or_else(|| previous_month(Local::now().date_naive()));
+            print_monthly_report(&generate_monthly_report(month, &config.time_accounting)?);
+        }
+        "tick" => run_automation_tick()?,
         "install" => {
             let installation = install_automation(&load_config()?)?;
             println!("Automatic daily recording and reminders are enabled.");
@@ -112,9 +130,17 @@ fn run() -> Result<(), String> {
 
 fn print_record(record: &work_work::DailyRecord) {
     println!(
-        "{}  wake {}  estimated end {}  reminder {}",
+        "{}  on {}  off {}  worked {}  estimated end {}  reminder {}",
         record.date,
         record.wake_time.format("%H:%M:%S"),
+        record
+            .display_off_time
+            .map(|time| time.format("%H:%M:%S").to_string())
+            .unwrap_or_else(|| "--".into()),
+        record
+            .work_minutes
+            .map(format_minutes)
+            .unwrap_or_else(|| "--".into()),
         record.estimated_end_time.format("%H:%M:%S"),
         if record.reminder_sent {
             "sent"
@@ -122,6 +148,26 @@ fn print_record(record: &work_work::DailyRecord) {
             "pending"
         }
     );
+}
+
+fn print_monthly_report(report: &MonthlyReport) {
+    println!("{}", report.month);
+    println!("Recorded days  {}", report.recorded_days);
+    println!("Completed days {}", report.completed_days);
+    println!("Worked         {}", format_minutes(report.total_minutes));
+    println!("Target         {}", format_minutes(report.target_minutes));
+    println!(
+        "Balance        {}",
+        format_signed_minutes(report.balance_minutes)
+    );
+    println!("Anomalies      {}", report.anomalies.len());
+    for anomaly in &report.anomalies {
+        let detail = anomaly
+            .work_minutes
+            .map(format_minutes)
+            .unwrap_or_else(|| "missing display-off event".into());
+        println!("  {}  {}  {}", anomaly.date, anomaly.kind, detail);
+    }
 }
 
 fn print_help() {
@@ -136,6 +182,7 @@ fn print_help() {
          ww record --force Recalculate and replace today's record\n  \
          ww remind         Send the reminder when it is due\n  \
          ww status         Show today's record\n  \
-         ww history [N]    Show the latest N records (default 14)\n"
+         ww history [N]    Show the latest N records (default 14)\n  \
+         ww month [YYYY-MM] Show a monthly work-hours summary\n"
     );
 }

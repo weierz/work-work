@@ -1,4 +1,4 @@
-use chrono::{Local, NaiveDate, NaiveTime, TimeDelta};
+use chrono::{Datelike, Days, Local, NaiveDate, NaiveTime, TimeDelta};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -15,17 +15,46 @@ pub struct Config {
     pub search: SearchConfig,
     pub schedule: ScheduleConfig,
     #[serde(default)]
+    pub time_accounting: TimeAccountingConfig,
+    #[serde(default)]
     pub automation: AutomationConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchConfig {
     #[serde(deserialize_with = "deserialize_time")]
-    pub target_time: NaiveTime,
-    #[serde(deserialize_with = "deserialize_time")]
     pub start_time: NaiveTime,
     #[serde(deserialize_with = "deserialize_time")]
     pub end_time: NaiveTime,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TimeAccountingConfig {
+    #[serde(deserialize_with = "deserialize_time")]
+    pub reasonable_end_start: NaiveTime,
+    #[serde(deserialize_with = "deserialize_time")]
+    pub reasonable_end_end: NaiveTime,
+    #[serde(deserialize_with = "deserialize_time")]
+    pub break_start: NaiveTime,
+    #[serde(deserialize_with = "deserialize_time")]
+    pub break_end: NaiveTime,
+    pub daily_target_minutes: i64,
+    pub anomaly_threshold_minutes: i64,
+    pub monthly_summary_day: u32,
+}
+
+impl Default for TimeAccountingConfig {
+    fn default() -> Self {
+        Self {
+            reasonable_end_start: NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            reasonable_end_end: NaiveTime::from_hms_opt(23, 0, 0).unwrap(),
+            break_start: NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+            break_end: NaiveTime::from_hms_opt(13, 0, 0).unwrap(),
+            daily_target_minutes: 480,
+            anomaly_threshold_minutes: 60,
+            monthly_summary_day: 15,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +112,10 @@ pub struct DailyRecord {
     pub reminder_minutes: i64,
     pub reminder_sent: bool,
     pub reminder_sent_at: Option<String>,
+    #[serde(default)]
+    pub display_off_time: Option<NaiveTime>,
+    #[serde(default)]
+    pub work_minutes: Option<i64>,
 }
 
 fn deserialize_time<'de, D>(deserializer: D) -> Result<NaiveTime, D::Error>
@@ -158,6 +191,23 @@ fn validate_config(config: &Config) -> Result<(), String> {
     if config.schedule.reminder_minutes < 1 {
         return Err("schedule.reminder_minutes must be at least 1".into());
     }
+    if config.time_accounting.reasonable_end_start > config.time_accounting.reasonable_end_end {
+        return Err(
+            "time_accounting.reasonable_end_start must not be after reasonable_end_end".into(),
+        );
+    }
+    if config.time_accounting.break_start >= config.time_accounting.break_end {
+        return Err("time_accounting.break_start must be before break_end".into());
+    }
+    if config.time_accounting.daily_target_minutes < 1 {
+        return Err("time_accounting.daily_target_minutes must be at least 1".into());
+    }
+    if config.time_accounting.anomaly_threshold_minutes < 1 {
+        return Err("time_accounting.anomaly_threshold_minutes must be at least 1".into());
+    }
+    if !(1..=28).contains(&config.time_accounting.monthly_summary_day) {
+        return Err("time_accounting.monthly_summary_day must be between 1 and 28".into());
+    }
     if config.automation.daily_record_time < config.search.end_time {
         return Err("automation.daily_record_time must not be before search.end_time".into());
     }
@@ -213,11 +263,46 @@ pub fn select_wake_event(log: &str, date: NaiveDate, search: &SearchConfig) -> O
         .filter_map(|line| line.split_whitespace().nth(1))
         .filter_map(|value| parse_time(value).ok())
         .filter(|time| *time >= search.start_time && *time <= search.end_time)
-        .min_by_key(|time| {
-            time.signed_duration_since(search.target_time)
-                .num_seconds()
-                .abs()
-        })
+        .min()
+}
+
+pub fn select_display_off_event(
+    log: &str,
+    date: NaiveDate,
+    wake_time: NaiveTime,
+    accounting: &TimeAccountingConfig,
+) -> Option<NaiveTime> {
+    let date_prefix = date.format("%Y-%m-%d").to_string();
+    let start = wake_time.max(accounting.reasonable_end_start);
+    log.lines()
+        .filter(|line| line.starts_with(&date_prefix) && line.contains("Display is turned off"))
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .filter_map(|value| parse_time(value).ok())
+        .filter(|time| *time >= start && *time <= accounting.reasonable_end_end)
+        .max()
+}
+
+pub fn calculate_work_minutes(
+    wake_time: NaiveTime,
+    display_off_time: NaiveTime,
+    accounting: &TimeAccountingConfig,
+) -> Option<i64> {
+    if display_off_time <= wake_time {
+        return None;
+    }
+    let total_seconds = display_off_time
+        .signed_duration_since(wake_time)
+        .num_seconds();
+    let overlap_start = wake_time.max(accounting.break_start);
+    let overlap_end = display_off_time.min(accounting.break_end);
+    let break_seconds = if overlap_end > overlap_start {
+        overlap_end
+            .signed_duration_since(overlap_start)
+            .num_seconds()
+    } else {
+        0
+    };
+    Some((total_seconds - break_seconds) / 60)
 }
 
 pub fn estimate_end_time(wake: NaiveTime, schedule: &ScheduleConfig) -> Result<NaiveTime, String> {
@@ -277,6 +362,16 @@ pub fn build_record(
     let unchanged = previous.as_ref().is_some_and(|record| {
         record.wake_time == wake_time && record.estimated_end_time == end_time
     });
+    let previous_display_off = if unchanged {
+        previous.as_ref().and_then(|record| record.display_off_time)
+    } else {
+        None
+    };
+    let previous_work_minutes = if unchanged {
+        previous.as_ref().and_then(|record| record.work_minutes)
+    } else {
+        None
+    };
     DailyRecord {
         date,
         wake_time,
@@ -285,11 +380,35 @@ pub fn build_record(
         reminder_minutes,
         reminder_sent: unchanged && previous.as_ref().is_some_and(|record| record.reminder_sent),
         reminder_sent_at: if unchanged {
-            previous.and_then(|record| record.reminder_sent_at)
+            previous
+                .as_ref()
+                .and_then(|record| record.reminder_sent_at.clone())
         } else {
             None
         },
+        display_off_time: previous_display_off,
+        work_minutes: previous_work_minutes,
     }
+}
+
+pub fn refresh_actual_time_for_date(
+    date: NaiveDate,
+    log: &str,
+    config: &Config,
+) -> Result<Option<DailyRecord>, String> {
+    let Some(mut record) = load_record(date)? else {
+        return Ok(None);
+    };
+    let display_off =
+        select_display_off_event(log, date, record.wake_time, &config.time_accounting);
+    let work_minutes = display_off
+        .and_then(|time| calculate_work_minutes(record.wake_time, time, &config.time_accounting));
+    if record.display_off_time != display_off || record.work_minutes != work_minutes {
+        record.display_off_time = display_off;
+        record.work_minutes = work_minutes;
+        save_record(&record)?;
+    }
+    Ok(Some(record))
 }
 
 pub fn should_remind(record: &DailyRecord, now: NaiveTime) -> bool {
@@ -396,6 +515,204 @@ pub fn remind_today() -> Result<ReminderOutcome, String> {
     Ok(ReminderOutcome::Sent)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DailyAnomaly {
+    pub date: NaiveDate,
+    pub kind: String,
+    pub work_minutes: Option<i64>,
+    pub difference_minutes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MonthlyReport {
+    pub month: String,
+    pub recorded_days: usize,
+    pub completed_days: usize,
+    pub total_minutes: i64,
+    pub target_minutes: i64,
+    pub balance_minutes: i64,
+    pub anomalies: Vec<DailyAnomaly>,
+    pub notified_at: Option<String>,
+}
+
+pub fn summarize_month(
+    month_start: NaiveDate,
+    records: &[DailyRecord],
+    accounting: &TimeAccountingConfig,
+) -> MonthlyReport {
+    let month_records = records
+        .iter()
+        .filter(|record| {
+            record.date.year() == month_start.year() && record.date.month() == month_start.month()
+        })
+        .collect::<Vec<_>>();
+    let total_minutes = month_records
+        .iter()
+        .filter_map(|record| record.work_minutes)
+        .sum::<i64>();
+    let target_minutes = month_records.len() as i64 * accounting.daily_target_minutes;
+    let anomalies = month_records
+        .iter()
+        .filter_map(|record| match record.work_minutes {
+            None => Some(DailyAnomaly {
+                date: record.date,
+                kind: "missing_display_off".into(),
+                work_minutes: None,
+                difference_minutes: None,
+            }),
+            Some(minutes) => {
+                let difference = minutes - accounting.daily_target_minutes;
+                (difference.abs() >= accounting.anomaly_threshold_minutes).then(|| DailyAnomaly {
+                    date: record.date,
+                    kind: if difference < 0 {
+                        "short_day".into()
+                    } else {
+                        "long_day".into()
+                    },
+                    work_minutes: Some(minutes),
+                    difference_minutes: Some(difference),
+                })
+            }
+        })
+        .collect::<Vec<_>>();
+    MonthlyReport {
+        month: month_start.format("%Y-%m").to_string(),
+        recorded_days: month_records.len(),
+        completed_days: month_records
+            .iter()
+            .filter(|record| record.work_minutes.is_some())
+            .count(),
+        total_minutes,
+        target_minutes,
+        balance_minutes: total_minutes - target_minutes,
+        anomalies,
+        notified_at: None,
+    }
+}
+
+fn monthly_dir() -> Result<PathBuf, String> {
+    let records = data_dir()?;
+    let root = records
+        .parent()
+        .ok_or_else(|| "records directory has no parent".to_string())?;
+    Ok(root.join("monthly"))
+}
+
+fn monthly_report_path(month_start: NaiveDate) -> Result<PathBuf, String> {
+    Ok(monthly_dir()?.join(format!("{}.json", month_start.format("%Y-%m"))))
+}
+
+fn load_saved_monthly_report(month_start: NaiveDate) -> Result<Option<MonthlyReport>, String> {
+    let path = monthly_report_path(month_start)?;
+    match fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents)
+            .map(Some)
+            .map_err(|error| format!("failed to parse {}: {error}", path.display())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error_string(error)),
+    }
+}
+
+fn save_monthly_report(report: &MonthlyReport) -> Result<PathBuf, String> {
+    let month_start = parse_month(&report.month)?;
+    let path = monthly_report_path(month_start)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(error_string)?;
+    }
+    let json = serde_json::to_string_pretty(report).map_err(error_string)?;
+    fs::write(&path, format!("{json}\n")).map_err(error_string)?;
+    Ok(path)
+}
+
+pub fn parse_month(value: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(&format!("{value}-01"), "%Y-%m-%d")
+        .map_err(|_| format!("invalid month `{value}`; expected YYYY-MM"))
+}
+
+pub fn previous_month(date: NaiveDate) -> NaiveDate {
+    date.with_day(1)
+        .unwrap()
+        .pred_opt()
+        .unwrap()
+        .with_day(1)
+        .unwrap()
+}
+
+pub fn generate_monthly_report(
+    month_start: NaiveDate,
+    accounting: &TimeAccountingConfig,
+) -> Result<MonthlyReport, String> {
+    let records = list_records(10_000)?;
+    let mut report = summarize_month(month_start, &records, accounting);
+    report.notified_at =
+        load_saved_monthly_report(month_start)?.and_then(|existing| existing.notified_at);
+    save_monthly_report(&report)?;
+    Ok(report)
+}
+
+fn send_monthly_notification(report: &MonthlyReport) -> Result<(), String> {
+    let message = format!(
+        "{}: {} recorded days, {}, balance {}, {} anomalies.",
+        report.month,
+        report.recorded_days,
+        format_minutes(report.total_minutes),
+        format_signed_minutes(report.balance_minutes),
+        report.anomalies.len()
+    );
+    let script = format!(
+        "display notification \"{}\" with title \"Work Work Monthly Summary\"",
+        escape_applescript(&message)
+    );
+    let status = Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .status()
+        .map_err(error_string)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("osascript exited with {status}"))
+    }
+}
+
+pub fn format_minutes(minutes: i64) -> String {
+    format!("{}h {:02}m", minutes / 60, minutes.abs() % 60)
+}
+
+pub fn format_signed_minutes(minutes: i64) -> String {
+    let sign = if minutes >= 0 { "+" } else { "-" };
+    format!("{sign}{}h {:02}m", minutes.abs() / 60, minutes.abs() % 60)
+}
+
+pub fn maybe_send_monthly_summary(
+    now: chrono::DateTime<Local>,
+    config: &Config,
+) -> Result<(), String> {
+    if now.day() != config.time_accounting.monthly_summary_day {
+        return Ok(());
+    }
+    let month = previous_month(now.date_naive());
+    let mut report = generate_monthly_report(month, &config.time_accounting)?;
+    if report.recorded_days == 0 || report.notified_at.is_some() {
+        return Ok(());
+    }
+    send_monthly_notification(&report)?;
+    report.notified_at = Some(now.to_rfc3339());
+    save_monthly_report(&report)?;
+    Ok(())
+}
+
+pub fn run_automation_tick() -> Result<(), String> {
+    let config = load_config()?;
+    let now = Local::now();
+    let log = read_pmset_log()?;
+    refresh_actual_time_for_date(now.date_naive(), &log, &config)?;
+    if let Some(yesterday) = now.date_naive().checked_sub_days(Days::new(1)) {
+        refresh_actual_time_for_date(yesterday, &log, &config)?;
+    }
+    let _ = remind_today()?;
+    maybe_send_monthly_summary(now, &config)
+}
+
 pub fn run_daemon() -> ! {
     loop {
         let sleep_seconds = match load_config() {
@@ -411,8 +728,8 @@ pub fn run_daemon() -> ! {
                     Err(error) => eprintln!("Could not read today's record: {error}"),
                     _ => {}
                 }
-                if let Err(error) = remind_today() {
-                    eprintln!("Automatic reminder failed: {error}");
+                if let Err(error) = run_automation_tick() {
+                    eprintln!("Automatic tick failed: {error}");
                 }
                 config.automation.reminder_check_seconds
             }
@@ -607,7 +924,7 @@ fn reminder_agent_plist(executable: &Path, home: &Path, data_root: &Path, interv
     launch_agent_plist(
         REMINDER_LABEL,
         executable,
-        &["remind", "--quiet"],
+        &["tick", "--quiet"],
         home,
         data_root,
         &schedule,
@@ -714,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    fn selects_event_closest_to_nine_and_ignores_midnight_wakes() {
+    fn selects_first_reasonable_event_and_ignores_midnight_wakes() {
         let log = r#"
 2026-08-20 00:23:30 +0800 Notification Display is turned on
 2026-08-20 08:30:00 +0800 Notification Display is turned on
@@ -724,7 +1041,48 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 8, 20).unwrap();
         assert_eq!(
             select_wake_event(log, date, &config().search),
-            Some(parse_time("09:11:27").unwrap())
+            Some(parse_time("08:30:00").unwrap())
+        );
+    }
+
+    #[test]
+    fn selects_last_reasonable_display_off_event() {
+        let log = r#"
+2026-08-20 14:55:00 +0800 Notification Display is turned off
+2026-08-20 17:45:00 +0800 Notification Display is turned off
+2026-08-20 18:21:30 +0800 Notification Display is turned off
+2026-08-20 23:10:00 +0800 Notification Display is turned off
+"#;
+        let date = NaiveDate::from_ymd_opt(2026, 8, 20).unwrap();
+        assert_eq!(
+            select_display_off_event(
+                log,
+                date,
+                parse_time("09:00").unwrap(),
+                &config().time_accounting,
+            ),
+            Some(parse_time("18:21:30").unwrap())
+        );
+    }
+
+    #[test]
+    fn work_minutes_exclude_only_the_overlapping_break() {
+        let accounting = config().time_accounting;
+        assert_eq!(
+            calculate_work_minutes(
+                parse_time("09:00").unwrap(),
+                parse_time("18:00").unwrap(),
+                &accounting,
+            ),
+            Some(480)
+        );
+        assert_eq!(
+            calculate_work_minutes(
+                parse_time("13:20").unwrap(),
+                parse_time("18:20").unwrap(),
+                &accounting,
+            ),
+            Some(300)
         );
     }
 
@@ -759,10 +1117,54 @@ mod tests {
             reminder_minutes: 10,
             reminder_sent: false,
             reminder_sent_at: None,
+            display_off_time: None,
+            work_minutes: None,
         };
         assert!(!should_remind(&record, parse_time("17:49").unwrap()));
         assert!(should_remind(&record, parse_time("17:50").unwrap()));
         assert!(!should_remind(&record, parse_time("18:00").unwrap()));
+    }
+
+    #[test]
+    fn monthly_summary_marks_missing_short_and_long_days() {
+        let month = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let record = |day, work_minutes: Option<i64>| DailyRecord {
+            date: NaiveDate::from_ymd_opt(2026, 7, day).unwrap(),
+            wake_time: parse_time("09:00").unwrap(),
+            estimated_end_time: parse_time("18:00").unwrap(),
+            source: "test".into(),
+            reminder_minutes: 10,
+            reminder_sent: false,
+            reminder_sent_at: None,
+            display_off_time: work_minutes.map(|_| parse_time("18:00").unwrap()),
+            work_minutes,
+        };
+        let records = vec![
+            record(1, Some(480)),
+            record(2, Some(390)),
+            record(3, Some(570)),
+            record(4, None),
+            DailyRecord {
+                date: NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+                ..record(5, Some(480))
+            },
+        ];
+
+        let report = summarize_month(month, &records, &config().time_accounting);
+
+        assert_eq!(report.recorded_days, 4);
+        assert_eq!(report.completed_days, 3);
+        assert_eq!(report.total_minutes, 1_440);
+        assert_eq!(report.target_minutes, 1_920);
+        assert_eq!(report.balance_minutes, -480);
+        assert_eq!(
+            report
+                .anomalies
+                .iter()
+                .map(|anomaly| anomaly.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["short_day", "long_day", "missing_display_off"]
+        );
     }
 
     #[test]
@@ -783,6 +1185,7 @@ mod tests {
         let reminder = reminder_agent_plist(executable, home, data, 60);
         assert!(reminder.contains("com.weierz.work-work.reminder"));
         assert!(reminder.contains("<integer>60</integer>"));
+        assert!(reminder.contains("<string>tick</string>"));
         assert!(reminder.contains("<string>--quiet</string>"));
 
         #[cfg(target_os = "macos")]

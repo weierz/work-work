@@ -1,10 +1,17 @@
 [search]
-# Only display-on events in this window are candidates. Run `ww record`
-# once after end_time so the full candidate window is available. The event
-# closest to target_time wins, which ignores short wakes around midnight.
-target_time = "09:00:00"
+# The first display-on event inside this window is the daily start time.
 start_time = "05:00:00"
 end_time = "14:00:00"
+
+[time_accounting]
+# The final display-off event inside this window is the daily end time.
+reasonable_end_start = "15:00:00"
+reasonable_end_end = "23:00:00"
+break_start = "12:00:00"
+break_end = "13:00:00"
+daily_target_minutes = 480
+anomaly_threshold_minutes = 60
+monthly_summary_day = 15
 
 [schedule]
 max_end_time = "19:00:00"
@@ -31,6 +38,6 @@ anchor_end = "18:00:00"
 # Record once per day, after the display-event search window has ended.
 daily_record_time = "14:05:00"
 
-# Only the lightweight reminder check repeats. It never recalculates or
-# overwrites the daily record.
+# The lightweight tick refreshes the last display-off time, sends due reminders,
+# and sends the previous month's summary on monthly_summary_day.
 reminder_check_seconds = 60
