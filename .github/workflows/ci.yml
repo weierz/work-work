@@ -16,6 +16,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check installer syntax
         run: zsh -n install.sh
+      - name: Check remote installer path
+        run: |
+          cd "$(mktemp -d)"
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh" | WAKE_CLOCK_INSTALL_DRY_RUN=1 zsh
       - name: Check
         run: cargo check --locked
       - name: Test

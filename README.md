@@ -19,7 +19,13 @@
 
 ## 安装
 
-需要 macOS 和 Rust 工具链：
+需要 macOS 和 Rust 工具链。使用 curl 一键完成下载、编译、配置和自动启动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/weierz/screen-wake-clock/main/install.sh | zsh
+```
+
+也可以从克隆的仓库安装：
 
 ```bash
 git clone https://github.com/weierz/screen-wake-clock.git
@@ -28,6 +34,21 @@ cd screen-wake-clock
 ```
 
 安装脚本会完成编译、安装并立即加载两个用户级 LaunchAgent。用户不需要再执行启动命令，也不需要管理员权限。
+
+### Homebrew
+
+通过 Homebrew tap 安装并启动服务：
+
+```bash
+brew install weierz/tap/wake-clock && brew services start weierz/tap/wake-clock
+```
+
+Homebrew 使用一个常驻的轻量服务读取同一份配置：每天只生成一次记录，并自动完成下班提醒。停止和卸载：
+
+```bash
+brew services stop weierz/tap/wake-clock
+brew uninstall weierz/tap/wake-clock
+```
 
 ## 日常使用
 
