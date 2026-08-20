@@ -1,4 +1,4 @@
-# Screen Wake Clock
+# Work Work
 
 一个面向 macOS 的 Rust 命令行工具。它从 `pmset -g log` 中读取屏幕亮起事件，估算当天的大致打卡时间和下班时间，并把结果保存为每日 JSON 记录。
 
@@ -22,14 +22,14 @@
 需要 macOS 和 Rust 工具链。使用 curl 一键完成下载、编译、配置和自动启动：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/weierz/screen-wake-clock/main/install.sh | zsh
+curl -fsSL https://raw.githubusercontent.com/weierz/work-work/main/install.sh | zsh
 ```
 
 也可以从克隆的仓库安装：
 
 ```bash
-git clone https://github.com/weierz/screen-wake-clock.git
-cd screen-wake-clock
+git clone https://github.com/weierz/work-work.git
+cd work-work
 ./install.sh
 ```
 
@@ -40,14 +40,14 @@ cd screen-wake-clock
 通过 Homebrew tap 安装并启动服务：
 
 ```bash
-brew install weierz/tap/wake-clock && brew services start weierz/tap/wake-clock
+brew install weierz/tap/work-work && brew services start weierz/tap/work-work
 ```
 
 Homebrew 使用一个常驻的轻量服务读取同一份配置：每天只生成一次记录，并自动完成下班提醒。停止和卸载：
 
 ```bash
-brew services stop weierz/tap/wake-clock
-brew uninstall weierz/tap/wake-clock
+brew services stop weierz/tap/work-work
+brew uninstall weierz/tap/work-work
 ```
 
 ## 日常使用
@@ -62,25 +62,25 @@ brew uninstall weierz/tap/wake-clock
 查看记录：
 
 ```bash
-wake-clock status
-wake-clock history
-wake-clock history 30
+ww status
+ww history
+ww history 30
 ```
 
 卸载自动任务，但保留配置和历史记录：
 
 ```bash
-wake-clock uninstall
+ww uninstall
 ```
 
 以下命令只用于调试或手动修正：
 
 ```bash
-wake-clock record           # 如果今天没有记录，则立即记录
-wake-clock record --force   # 强制重新计算今天的记录
-wake-clock remind           # 立即检查提醒状态
-wake-clock init             # 创建默认配置
-wake-clock help
+ww record           # 如果今天没有记录，则立即记录
+ww record --force   # 强制重新计算今天的记录
+ww remind           # 立即检查提醒状态
+ww init             # 创建默认配置
+ww help
 ```
 
 ## 配置
@@ -88,7 +88,7 @@ wake-clock help
 安装时会自动创建（也可通过 `init` 或 `record` 创建）：
 
 ```text
-~/.config/wake-clock/config.toml
+~/.config/work-work/config.toml
 ```
 
 完整示例见 [`config.example.toml`](config.example.toml)。主要配置项：
@@ -122,7 +122,7 @@ anchor_end = "18:00:00"
 修改自动化时间或检查间隔后，重新执行一次：
 
 ```bash
-wake-clock install
+ww install
 ```
 
 ## 数据
@@ -130,14 +130,14 @@ wake-clock install
 每日记录保存在：
 
 ```text
-~/.local/share/wake-clock/records/YYYY-MM-DD.json
+~/.local/share/work-work/records/YYYY-MM-DD.json
 ```
 
 后台任务日志位于：
 
 ```text
-~/.local/share/wake-clock/wake-clock.log
-~/.local/share/wake-clock/wake-clock.error.log
+~/.local/share/work-work/work-work.log
+~/.local/share/work-work/work-work.error.log
 ```
 
 示例：
@@ -157,8 +157,8 @@ wake-clock install
 可用以下环境变量临时改写路径，便于测试或脚本集成：
 
 ```bash
-WAKE_CLOCK_CONFIG=/path/to/config.toml
-WAKE_CLOCK_DATA_DIR=/path/to/records
+WW_CONFIG=/path/to/config.toml
+WW_DATA_DIR=/path/to/records
 ```
 
 ## 开发

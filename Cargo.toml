@@ -1,13 +1,13 @@
 [package]
-name = "screen-wake-clock"
+name = "work-work"
 version = "0.3.0"
 edition = "2024"
 description = "Estimate and record macOS clock-out time from display wake events"
 license = "MIT"
-repository = "https://github.com/weierz/screen-wake-clock"
+repository = "https://github.com/weierz/work-work"
 
 [[bin]]
-name = "wake-clock"
+name = "ww"
 path = "src/main.rs"
 
 [dependencies]

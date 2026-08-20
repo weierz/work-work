@@ -109,17 +109,17 @@ pub fn parse_time(value: &str) -> Result<NaiveTime, String> {
 }
 
 pub fn config_path() -> Result<PathBuf, String> {
-    if let Ok(path) = env::var("WAKE_CLOCK_CONFIG") {
+    if let Ok(path) = env::var("WW_CONFIG") {
         return Ok(PathBuf::from(path));
     }
-    Ok(home_dir()?.join(".config/wake-clock/config.toml"))
+    Ok(home_dir()?.join(".config/work-work/config.toml"))
 }
 
 pub fn data_dir() -> Result<PathBuf, String> {
-    if let Ok(path) = env::var("WAKE_CLOCK_DATA_DIR") {
+    if let Ok(path) = env::var("WW_DATA_DIR") {
         return Ok(PathBuf::from(path));
     }
-    Ok(home_dir()?.join(".local/share/wake-clock/records"))
+    Ok(home_dir()?.join(".local/share/work-work/records"))
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -311,7 +311,7 @@ pub fn send_notification(record: &DailyRecord) -> Result<(), String> {
         record.wake_time.format("%H:%M")
     );
     let script = format!(
-        "display notification \"{}\" with title \"Wake Clock\"",
+        "display notification \"{}\" with title \"Work Work\"",
         escape_applescript(&message)
     );
     let status = Command::new("/usr/bin/osascript")
@@ -447,8 +447,8 @@ pub fn list_records(limit: usize) -> Result<Vec<DailyRecord>, String> {
         .collect()
 }
 
-const RECORD_LABEL: &str = "com.weierz.wake-clock.record";
-const REMINDER_LABEL: &str = "com.weierz.wake-clock.reminder";
+const RECORD_LABEL: &str = "com.weierz.work-work.record";
+const REMINDER_LABEL: &str = "com.weierz.work-work.reminder";
 
 #[derive(Debug)]
 pub struct AutomationInstallation {
@@ -462,7 +462,7 @@ pub fn install_automation(config: &Config) -> Result<AutomationInstallation, Str
     let source_executable = env::current_exe().map_err(error_string)?;
     let bin_dir = home.join(".local/bin");
     fs::create_dir_all(&bin_dir).map_err(error_string)?;
-    let executable = bin_dir.join("wake-clock");
+    let executable = bin_dir.join("ww");
     if !paths_refer_to_same_file(&source_executable, &executable) {
         fs::copy(&source_executable, &executable).map_err(|error| {
             format!(
@@ -472,7 +472,7 @@ pub fn install_automation(config: &Config) -> Result<AutomationInstallation, Str
         })?;
     }
 
-    let data_root = home.join(".local/share/wake-clock");
+    let data_root = home.join(".local/share/work-work");
     fs::create_dir_all(&data_root).map_err(error_string)?;
     let agents_dir = home.join("Library/LaunchAgents");
     fs::create_dir_all(&agents_dir).map_err(error_string)?;
@@ -521,7 +521,7 @@ pub fn uninstall_automation() -> Result<(), String> {
         bootout_agent(&domain, label);
         remove_file_if_exists(&home.join(format!("Library/LaunchAgents/{label}.plist")))?;
     }
-    remove_file_if_exists(&home.join(".local/bin/wake-clock"))?;
+    remove_file_if_exists(&home.join(".local/bin/ww"))?;
     Ok(())
 }
 
@@ -648,9 +648,9 @@ fn launch_agent_plist(
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>{data_root}/wake-clock.log</string>
+  <string>{data_root}/work-work.log</string>
   <key>StandardErrorPath</key>
-  <string>{data_root}/wake-clock.error.log</string>
+  <string>{data_root}/work-work.error.log</string>
 </dict>
 </plist>
 "#,
@@ -685,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn old_configs_receive_safe_automation_defaults() {
+    fn configs_without_automation_use_defaults() {
         let old_config = DEFAULT_CONFIG.split("[automation]").next().unwrap();
         let config: Config = toml::from_str(old_config).unwrap();
         assert_eq!(
@@ -763,20 +763,20 @@ mod tests {
     #[test]
     fn creates_separate_daily_record_and_reminder_agents() {
         let config = config();
-        let executable = Path::new("/Users/a&b/.local/bin/wake-clock");
+        let executable = Path::new("/Users/a&b/.local/bin/ww");
         let home = Path::new("/Users/a&b");
-        let data = Path::new("/Users/a&b/.local/share/wake-clock");
+        let data = Path::new("/Users/a&b/.local/share/work-work");
         let record =
             record_agent_plist(executable, home, data, config.automation.daily_record_time);
-        assert!(record.contains("com.weierz.wake-clock.record"));
+        assert!(record.contains("com.weierz.work-work.record"));
         assert!(record.contains("<integer>14</integer>"));
         assert!(record.contains("<integer>05</integer>"));
-        assert!(record.contains("/Users/a&amp;b/.local/bin/wake-clock"));
+        assert!(record.contains("/Users/a&amp;b/.local/bin/ww"));
         assert!(record.contains("<string>--scheduled</string>"));
         assert!(record.contains("<key>RunAtLoad</key>"));
 
         let reminder = reminder_agent_plist(executable, home, data, 60);
-        assert!(reminder.contains("com.weierz.wake-clock.reminder"));
+        assert!(reminder.contains("com.weierz.work-work.reminder"));
         assert!(reminder.contains("<integer>60</integer>"));
         assert!(reminder.contains("<string>--quiet</string>"));
 

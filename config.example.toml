@@ -1,5 +1,5 @@
 [search]
-# Only display-on events in this window are candidates. Run `wake-clock record`
+# Only display-on events in this window are candidates. Run `ww record`
 # once after end_time so the full candidate window is available. The event
 # closest to target_time wins, which ignores short wakes around midnight.
 target_time = "09:00:00"

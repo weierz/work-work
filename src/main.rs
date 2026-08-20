@@ -1,11 +1,11 @@
 use chrono::Local;
-use screen_wake_clock::{
+use std::env;
+use std::process::ExitCode;
+use work_work::{
     ReminderOutcome, ensure_default_config, install_automation, list_records, load_config,
     load_record, record_today, remind_today, run_daemon, scheduled_record_is_due,
     uninstall_automation,
 };
-use std::env;
-use std::process::ExitCode;
 
 fn main() -> ExitCode {
     match run() {
@@ -59,9 +59,9 @@ fn run() -> Result<(), String> {
             let today = Local::now().date_naive();
             match load_record(today)? {
                 Some(record) => print_record(&record),
-                None => println!(
-                    "No record for {today}. Run `wake-clock record` once after the search window."
-                ),
+                None => {
+                    println!("No record for {today}. Run `ww record` once after the search window.")
+                }
             }
         }
         "history" => {
@@ -99,12 +99,12 @@ fn run() -> Result<(), String> {
         }
         "daemon" => run_daemon(),
         "help" | "--help" | "-h" => print_help(),
-        other => return Err(format!("unknown command `{other}`; run wake-clock help")),
+        other => return Err(format!("unknown command `{other}`; run ww help")),
     }
     Ok(())
 }
 
-fn print_record(record: &screen_wake_clock::DailyRecord) {
+fn print_record(record: &work_work::DailyRecord) {
     println!(
         "{}  wake {}  estimated end {}  reminder {}",
         record.date,
@@ -120,15 +120,15 @@ fn print_record(record: &screen_wake_clock::DailyRecord) {
 
 fn print_help() {
     println!(
-        "wake-clock — estimate clock-out time from macOS display wake events\n\n\
+        "ww — estimate clock-out time from macOS display wake events\n\n\
          Usage:\n  \
-         wake-clock init           Create the default config\n  \
-         wake-clock install        Enable automatic daily recording and reminders\n  \
-         wake-clock uninstall      Disable automation and keep config/history\n  \
-         wake-clock record         Create today's record once\n  \
-         wake-clock record --force Recalculate and replace today's record\n  \
-         wake-clock remind         Send the reminder when it is due\n  \
-         wake-clock status         Show today's record\n  \
-         wake-clock history [N]    Show the latest N records (default 14)\n"
+         ww init           Create the default config\n  \
+         ww install        Enable automatic daily recording and reminders\n  \
+         ww uninstall      Disable automation and keep config/history\n  \
+         ww record         Create today's record once\n  \
+         ww record --force Recalculate and replace today's record\n  \
+         ww remind         Send the reminder when it is due\n  \
+         ww status         Show today's record\n  \
+         ww history [N]    Show the latest N records (default 14)\n"
     );
 }

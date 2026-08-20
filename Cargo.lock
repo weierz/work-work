@@ -216,16 +216,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
-name = "screen-wake-clock"
-version = "0.3.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "toml",
-]
-
-[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -465,6 +455,16 @@ name = "winnow"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+
+[[package]]
+name = "work-work"
+version = "0.3.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "toml",
+]
 
 [[package]]
 name = "zmij"
