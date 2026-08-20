@@ -50,17 +50,21 @@ Every part of this schedule can be changed in the configuration file.
 
 ## Installation
 
-Work Work requires macOS and a Rust toolchain.
+Work Work requires macOS. The one-line installer uses a prebuilt binary, so Rust is not required.
 
 ### One-line installer
 
-The installer downloads the project, builds `ww`, creates the default configuration, and enables automatic recording and notifications:
+The installer detects Apple Silicon or Intel automatically, downloads the latest prebuilt `ww` binary, creates the default configuration, and enables automatic recording and notifications:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/weierz/work-work/main/install.sh | zsh
 ```
 
-### From a clone
+Prebuilt archives for Apple Silicon and Intel are also available on the [Releases page](https://github.com/weierz/work-work/releases).
+
+### Build from source
+
+Building from source requires a Rust toolchain:
 
 ```bash
 git clone https://github.com/weierz/work-work.git
