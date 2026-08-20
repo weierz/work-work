@@ -5,6 +5,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 pub const DEFAULT_CONFIG: &str = include_str!("../config.example.toml");
 
@@ -392,6 +394,35 @@ pub fn remind_today() -> Result<ReminderOutcome, String> {
     record.reminder_sent_at = Some(now.to_rfc3339());
     save_record(&record)?;
     Ok(ReminderOutcome::Sent)
+}
+
+pub fn run_daemon() -> ! {
+    loop {
+        let sleep_seconds = match load_config() {
+            Ok(config) => {
+                let now = Local::now();
+                let date = now.date_naive();
+                match load_record(date) {
+                    Ok(None) if scheduled_record_is_due(now.time(), &config) => {
+                        if let Err(error) = record_today(false) {
+                            eprintln!("Automatic record failed: {error}");
+                        }
+                    }
+                    Err(error) => eprintln!("Could not read today's record: {error}"),
+                    _ => {}
+                }
+                if let Err(error) = remind_today() {
+                    eprintln!("Automatic reminder failed: {error}");
+                }
+                config.automation.reminder_check_seconds
+            }
+            Err(error) => {
+                eprintln!("Could not load configuration: {error}");
+                300
+            }
+        };
+        thread::sleep(Duration::from_secs(sleep_seconds));
+    }
 }
 
 pub fn list_records(limit: usize) -> Result<Vec<DailyRecord>, String> {

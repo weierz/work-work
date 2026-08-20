@@ -1,6 +1,6 @@
 [package]
 name = "screen-wake-clock"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Estimate and record macOS clock-out time from display wake events"
 license = "MIT"

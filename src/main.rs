@@ -1,7 +1,8 @@
 use chrono::Local;
 use screen_wake_clock::{
     ReminderOutcome, ensure_default_config, install_automation, list_records, load_config,
-    load_record, record_today, remind_today, scheduled_record_is_due, uninstall_automation,
+    load_record, record_today, remind_today, run_daemon, scheduled_record_is_due,
+    uninstall_automation,
 };
 use std::env;
 use std::process::ExitCode;
@@ -96,6 +97,7 @@ fn run() -> Result<(), String> {
             println!("Automatic recording and reminders are disabled.");
             println!("Configuration and history were kept.");
         }
+        "daemon" => run_daemon(),
         "help" | "--help" | "-h" => print_help(),
         other => return Err(format!("unknown command `{other}`; run wake-clock help")),
     }
