@@ -1,8 +1,8 @@
 # Work Work
 
-**A tiny macOS helper that estimates when your workday ends.**
+**A tiny macOS helper that estimates when your workday ends and keeps a lightweight work-hours journal.**
 
-Work Work reads local display-wake events from macOS, keeps one lightweight record per day, and sends a notification when it is almost time to wrap up.
+Work Work reads local display events from macOS, records a reasonable first display-on and last display-off for each day, and sends a notification when it is almost time to wrap up.
 
 ```console
 $ ww
@@ -14,10 +14,12 @@ No account, server, or manual check-in is required. Everything stays on your Mac
 ## What it does
 
 1. Reads `Display is turned on` events from `pmset -g log`.
-2. Selects the event closest to your configured start time.
+2. Selects the first event inside your configured start window.
 3. Applies your schedule rules to estimate an end time.
-4. Saves one local JSON record for the day.
-5. Sends one macOS notification before the estimated end time.
+4. Captures the last display-off event inside your configured end window.
+5. Calculates net work time after subtracting the configured break overlap.
+6. Sends one macOS notification before the estimated end time.
+7. On the 15th, summarizes the previous month and marks unusual days.
 
 By default, Work Work records the day at `14:05` and sends a notification 10 minutes before the estimated end time.
 
@@ -26,7 +28,7 @@ By default, Work Work records the day at `14:05` and sends a notification 10 min
 
 ## Default schedule
 
-The default search window is `05:00–14:00`. Within that window, Work Work selects the display-wake event closest to `09:00`.
+The default start window is `05:00–14:00`. Within that window, Work Work selects the first display-on event. Events such as an automatic midnight wake are therefore ignored.
 
 | Selected wake time | Estimated end time |
 | --- | --- |
@@ -90,6 +92,8 @@ ww              # Print only today's estimated end time
 ww status       # Show today's full record
 ww history      # Show the latest 14 records
 ww history 30   # Show the latest 30 records
+ww month        # Summarize the previous month
+ww month 2026-07 # Summarize a specific month
 ```
 
 Useful maintenance commands:
@@ -116,9 +120,15 @@ See [`config.example.toml`](config.example.toml) for the complete example.
 
 | Setting | Purpose | Default |
 | --- | --- | --- |
-| `search.target_time` | Preferred start time used to rank wake events | `09:00:00` |
 | `search.start_time` | Start of the wake-event search window | `05:00:00` |
 | `search.end_time` | End of the wake-event search window | `14:00:00` |
+| `time_accounting.reasonable_end_start` | Start of the display-off window | `15:00:00` |
+| `time_accounting.reasonable_end_end` | End of the display-off window | `23:00:00` |
+| `time_accounting.break_start` | Start of the unpaid break | `12:00:00` |
+| `time_accounting.break_end` | End of the unpaid break | `13:00:00` |
+| `time_accounting.daily_target_minutes` | Expected work time per recorded day | `480` |
+| `time_accounting.anomaly_threshold_minutes` | Difference from the target that marks a day unusual | `60` |
+| `time_accounting.monthly_summary_day` | Day to summarize the previous month | `15` |
 | `schedule.max_end_time` | Latest allowed estimated end time | `19:00:00` |
 | `schedule.reminder_minutes` | Minutes before the end time to notify | `10` |
 | `automation.daily_record_time` | Time to create the daily record | `14:05:00` |
@@ -150,6 +160,18 @@ After changing an automation time or interval for a source installation, reload 
 ww install
 ```
 
+### Work-hours accounting
+
+Work time is calculated as:
+
+```text
+last reasonable display-off − first reasonable display-on − overlapping break time
+```
+
+With the defaults, `09:00–18:00` becomes 8 hours after the `12:00–13:00` break. A day is marked as unusual when it differs from the 8-hour target by at least 60 minutes, or when no reasonable display-off event was found.
+
+On the configured summary day, Work Work sends one notification for the previous month. The monthly balance includes every day that has a daily record. It deliberately does not interpret weekends, public holidays, or leave; unrecorded dates are simply absent, while a recorded date without a display-off event is marked as an anomaly.
+
 ## Data and privacy
 
 Work Work only reads local macOS power-management logs. It does not send your activity or records anywhere.
@@ -177,8 +199,16 @@ Example record:
   "source": "pmset: Display is turned on",
   "reminder_minutes": 10,
   "reminder_sent": false,
-  "reminder_sent_at": null
+  "reminder_sent_at": null,
+  "display_off_time": "18:21:30",
+  "work_minutes": 490
 }
+```
+
+Monthly summaries:
+
+```text
+~/.local/share/work-work/monthly/YYYY-MM.json
 ```
 
 For scripts and temporary environments, the default paths can be overridden:
@@ -196,10 +226,10 @@ If no notification appears, make sure macOS allows `osascript` notifications and
 ~/.local/share/work-work/work-work.error.log
 ```
 
-If the estimated time looks wrong, inspect the wake events for today and adjust the search window or target time:
+If the recorded times look wrong, inspect today's display events and adjust the start or end window:
 
 ```bash
-pmset -g log | grep "$(date +%Y-%m-%d).*Display is turned on"
+pmset -g log | grep -E "$(date +%Y-%m-%d).*Display is turned (on|off)"
 ```
 
 ## Development
@@ -213,8 +243,9 @@ cargo test --locked
 ## Requirements and limitations
 
 - macOS only; Work Work relies on the built-in `pmset` command.
-- Display-wake events are an approximation of when work began.
-- Short automatic wake events can occur, so the search window and target time matter.
+- Display events are an approximation of when work began and ended.
+- Short automatic events can occur, so the configured start and end windows matter.
+- Monthly summaries do not infer workdays, holidays, or leave.
 - Notifications require permission for `osascript` to post notifications.
 
 ## License
