@@ -122,13 +122,22 @@ fn run() -> Result<(), String> {
 }
 
 fn print_record(record: &work_work::DailyRecord) {
+    println!("Date              {}", record.date);
+    println!("First display on  {}", record.wake_time.format("%H:%M:%S"));
     println!(
-        "{}  on {}  off {}  worked {}  estimated end {}  reminder {}",
-        record.date,
-        record.wake_time.format("%H:%M:%S"),
-        format_optional_time(record.display_off_time),
-        format_optional_minutes(record.work_minutes),
-        record.estimated_end_time.format("%H:%M:%S"),
+        "Last display off  {}",
+        format_optional_time(record.display_off_time)
+    );
+    println!(
+        "Worked            {}",
+        format_optional_minutes(record.work_minutes)
+    );
+    println!(
+        "Estimated end     {}",
+        record.estimated_end_time.format("%H:%M:%S")
+    );
+    println!(
+        "Reminder          {}",
         if record.reminder_sent {
             "sent"
         } else {
