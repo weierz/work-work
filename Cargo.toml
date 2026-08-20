@@ -1,0 +1,17 @@
+[package]
+name = "screen-wake-clock"
+version = "0.1.0"
+edition = "2024"
+description = "Estimate and record macOS clock-out time from display wake events"
+license = "MIT"
+repository = "https://github.com/weierz/screen-wake-clock"
+
+[[bin]]
+name = "wake-clock"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.4"

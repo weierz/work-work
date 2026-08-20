@@ -1,0 +1,28 @@
+[search]
+# Only display-on events in this window are candidates. Run `wake-clock record`
+# once after end_time so the full candidate window is available. The event
+# closest to target_time wins, which ignores short wakes around midnight.
+target_time = "09:00:00"
+start_time = "05:00:00"
+end_time = "14:00:00"
+
+[schedule]
+max_end_time = "19:00:00"
+reminder_minutes = 30
+
+# Rules are evaluated from top to bottom. The first matching `until` wins.
+[[schedule.rules]]
+until = "10:00:00"
+kind = "add_duration"
+duration_minutes = 540
+
+[[schedule.rules]]
+until = "13:00:00"
+kind = "fixed"
+end_time = "18:00:00"
+
+[[schedule.rules]]
+until = "14:00:00"
+kind = "carry_delay"
+anchor_start = "13:00:00"
+anchor_end = "18:00:00"
