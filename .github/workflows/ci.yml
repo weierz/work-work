@@ -19,7 +19,7 @@ jobs:
       - name: Check remote installer path
         run: |
           cd "$(mktemp -d)"
-          curl -fsSL -H "Authorization: Bearer ${{ github.token }}" "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh" | WW_INSTALL_DRY_RUN=1 zsh
+          curl -fsSL -H "Authorization: Bearer ${{ github.token }}" "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh" | WW_GITHUB_TOKEN="${{ github.token }}" WW_INSTALL_DRY_RUN=1 zsh
       - name: Check
         run: cargo check --locked
       - name: Test

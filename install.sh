@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-REPOSITORY_ARCHIVE=https://github.com/weierz/work-work/archive/refs/heads/main.tar.gz
+PUBLIC_REPOSITORY_ARCHIVE=https://github.com/weierz/work-work/archive/refs/heads/main.tar.gz
+PRIVATE_REPOSITORY_ARCHIVE=https://api.github.com/repos/weierz/work-work/tarball/main
 SCRIPT_DIR=${0:A:h}
 TEMP_PROJECT_DIR=
 
@@ -19,7 +20,14 @@ else
   TEMP_PROJECT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/work-work.XXXXXX")
   trap '[[ -n "$TEMP_PROJECT_DIR" ]] && rm -rf "$TEMP_PROJECT_DIR"' EXIT HUP INT TERM
   echo "Downloading work-work..."
-  curl -fsSL "$REPOSITORY_ARCHIVE" | tar -xz -C "$TEMP_PROJECT_DIR" --strip-components=1
+  if [[ -n ${WW_GITHUB_TOKEN:-} ]]; then
+    curl -fsSL \
+      -H "Authorization: Bearer $WW_GITHUB_TOKEN" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "$PRIVATE_REPOSITORY_ARCHIVE" | tar -xz -C "$TEMP_PROJECT_DIR" --strip-components=1
+  else
+    curl -fsSL "$PUBLIC_REPOSITORY_ARCHIVE" | tar -xz -C "$TEMP_PROJECT_DIR" --strip-components=1
+  fi
   PROJECT_DIR=$TEMP_PROJECT_DIR
 fi
 
