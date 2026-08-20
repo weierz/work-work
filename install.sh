@@ -37,11 +37,11 @@ else
     fi
   done
 
-  case $(uname -m) in
+  MACHINE_ARCH=${WW_INSTALL_ARCH:-$(uname -m)}
+  case $MACHINE_ARCH in
     arm64 | aarch64) TARGET=aarch64-apple-darwin ;;
-    x86_64) TARGET=x86_64-apple-darwin ;;
     *)
-      echo "Error: unsupported Mac architecture '$(uname -m)'." >&2
+      echo "Error: work-work currently supports Apple Silicon Macs only (found '$MACHINE_ARCH')." >&2
       exit 1
       ;;
   esac
