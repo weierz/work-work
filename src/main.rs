@@ -1,6 +1,7 @@
 use chrono::Local;
 use screen_wake_clock::{
-    ReminderOutcome, ensure_default_config, list_records, load_record, record_today, remind_today,
+    ReminderOutcome, ensure_default_config, install_automation, list_records, load_config,
+    load_record, record_today, remind_today, scheduled_record_is_due, uninstall_automation,
 };
 use std::env;
 use std::process::ExitCode;
@@ -25,16 +26,34 @@ fn run() -> Result<(), String> {
         }
         "record" => {
             let force = args.iter().any(|argument| argument == "--force");
-            print_record(&record_today(force)?);
-        }
-        "remind" => match remind_today()? {
-            ReminderOutcome::Sent => println!("Reminder sent"),
-            ReminderOutcome::AlreadySent => println!("Reminder already sent"),
-            ReminderOutcome::NotDue { reminder_time } => {
-                println!("Reminder is due at {}", reminder_time.format("%H:%M:%S"))
+            let scheduled = args.iter().any(|argument| argument == "--scheduled");
+            let quiet = args.iter().any(|argument| argument == "--quiet");
+            if scheduled {
+                let config = load_config()?;
+                if !scheduled_record_is_due(Local::now().time(), &config) {
+                    return Ok(());
+                }
             }
-            ReminderOutcome::EndTimePassed => println!("Estimated end time has already passed"),
-        },
+            let record = record_today(force)?;
+            if !quiet {
+                print_record(&record);
+            }
+        }
+        "remind" => {
+            let quiet = args.iter().any(|argument| argument == "--quiet");
+            match remind_today()? {
+                ReminderOutcome::Sent => println!("Reminder sent"),
+                ReminderOutcome::AlreadySent if !quiet => println!("Reminder already sent"),
+                ReminderOutcome::NoRecord if !quiet => println!("No record for today yet"),
+                ReminderOutcome::NotDue { reminder_time } if !quiet => {
+                    println!("Reminder is due at {}", reminder_time.format("%H:%M:%S"))
+                }
+                ReminderOutcome::EndTimePassed if !quiet => {
+                    println!("Estimated end time has already passed")
+                }
+                _ => {}
+            }
+        }
         "status" => {
             let today = Local::now().date_naive();
             match load_record(today)? {
@@ -65,6 +84,18 @@ fn run() -> Result<(), String> {
                 );
             }
         }
+        "install" => {
+            let installation = install_automation(&load_config()?)?;
+            println!("Automatic daily recording and reminders are enabled.");
+            println!("Executable: {}", installation.executable.display());
+            println!("Record agent: {}", installation.record_agent.display());
+            println!("Reminder agent: {}", installation.reminder_agent.display());
+        }
+        "uninstall" => {
+            uninstall_automation()?;
+            println!("Automatic recording and reminders are disabled.");
+            println!("Configuration and history were kept.");
+        }
         "help" | "--help" | "-h" => print_help(),
         other => return Err(format!("unknown command `{other}`; run wake-clock help")),
     }
@@ -90,6 +121,8 @@ fn print_help() {
         "wake-clock — estimate clock-out time from macOS display wake events\n\n\
          Usage:\n  \
          wake-clock init           Create the default config\n  \
+         wake-clock install        Enable automatic daily recording and reminders\n  \
+         wake-clock uninstall      Disable automation and keep config/history\n  \
          wake-clock record         Create today's record once\n  \
          wake-clock record --force Recalculate and replace today's record\n  \
          wake-clock remind         Send the reminder when it is due\n  \

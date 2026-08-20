@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 pub const DEFAULT_CONFIG: &str = include_str!("../config.example.toml");
 
@@ -12,6 +12,8 @@ pub const DEFAULT_CONFIG: &str = include_str!("../config.example.toml");
 pub struct Config {
     pub search: SearchConfig,
     pub schedule: ScheduleConfig,
+    #[serde(default)]
+    pub automation: AutomationConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,6 +46,22 @@ pub struct RuleConfig {
     pub anchor_start: Option<NaiveTime>,
     #[serde(default, deserialize_with = "deserialize_optional_time")]
     pub anchor_end: Option<NaiveTime>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutomationConfig {
+    #[serde(deserialize_with = "deserialize_time")]
+    pub daily_record_time: NaiveTime,
+    pub reminder_check_seconds: u64,
+}
+
+impl Default for AutomationConfig {
+    fn default() -> Self {
+        Self {
+            daily_record_time: NaiveTime::from_hms_opt(14, 5, 0).unwrap(),
+            reminder_check_seconds: 60,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -137,6 +155,12 @@ fn validate_config(config: &Config) -> Result<(), String> {
     }
     if config.schedule.reminder_minutes < 0 {
         return Err("schedule.reminder_minutes must be non-negative".into());
+    }
+    if config.automation.daily_record_time < config.search.end_time {
+        return Err("automation.daily_record_time must not be before search.end_time".into());
+    }
+    if config.automation.reminder_check_seconds < 30 {
+        return Err("automation.reminder_check_seconds must be at least 30".into());
     }
     if config
         .schedule
@@ -330,10 +354,15 @@ pub fn record_today(force: bool) -> Result<DailyRecord, String> {
     Ok(record)
 }
 
+pub fn scheduled_record_is_due(now: NaiveTime, config: &Config) -> bool {
+    now >= config.automation.daily_record_time
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReminderOutcome {
     Sent,
     AlreadySent,
+    NoRecord,
     NotDue { reminder_time: NaiveTime },
     EndTimePassed,
 }
@@ -341,8 +370,9 @@ pub enum ReminderOutcome {
 pub fn remind_today() -> Result<ReminderOutcome, String> {
     let now = Local::now();
     let date = now.date_naive();
-    let mut record = load_record(date)?
-        .ok_or_else(|| format!("no record for {date}; run `wake-clock record` first"))?;
+    let Some(mut record) = load_record(date)? else {
+        return Ok(ReminderOutcome::NoRecord);
+    };
     if record.reminder_sent {
         return Ok(ReminderOutcome::AlreadySent);
     }
@@ -386,6 +416,229 @@ pub fn list_records(limit: usize) -> Result<Vec<DailyRecord>, String> {
         .collect()
 }
 
+const RECORD_LABEL: &str = "com.weierz.wake-clock.record";
+const REMINDER_LABEL: &str = "com.weierz.wake-clock.reminder";
+
+#[derive(Debug)]
+pub struct AutomationInstallation {
+    pub executable: PathBuf,
+    pub record_agent: PathBuf,
+    pub reminder_agent: PathBuf,
+}
+
+pub fn install_automation(config: &Config) -> Result<AutomationInstallation, String> {
+    let home = home_dir()?;
+    let source_executable = env::current_exe().map_err(error_string)?;
+    let bin_dir = home.join(".local/bin");
+    fs::create_dir_all(&bin_dir).map_err(error_string)?;
+    let executable = bin_dir.join("wake-clock");
+    if !paths_refer_to_same_file(&source_executable, &executable) {
+        fs::copy(&source_executable, &executable).map_err(|error| {
+            format!(
+                "failed to install {}: {error}",
+                executable.to_string_lossy()
+            )
+        })?;
+    }
+
+    let data_root = home.join(".local/share/wake-clock");
+    fs::create_dir_all(&data_root).map_err(error_string)?;
+    let agents_dir = home.join("Library/LaunchAgents");
+    fs::create_dir_all(&agents_dir).map_err(error_string)?;
+    let record_agent = agents_dir.join(format!("{RECORD_LABEL}.plist"));
+    let reminder_agent = agents_dir.join(format!("{REMINDER_LABEL}.plist"));
+
+    fs::write(
+        &record_agent,
+        record_agent_plist(
+            &executable,
+            &home,
+            &data_root,
+            config.automation.daily_record_time,
+        ),
+    )
+    .map_err(error_string)?;
+    fs::write(
+        &reminder_agent,
+        reminder_agent_plist(
+            &executable,
+            &home,
+            &data_root,
+            config.automation.reminder_check_seconds,
+        ),
+    )
+    .map_err(error_string)?;
+
+    let domain = launchd_domain()?;
+    reload_agent(&domain, RECORD_LABEL, &record_agent)?;
+    if let Err(error) = reload_agent(&domain, REMINDER_LABEL, &reminder_agent) {
+        bootout_agent(&domain, RECORD_LABEL);
+        return Err(error);
+    }
+
+    Ok(AutomationInstallation {
+        executable,
+        record_agent,
+        reminder_agent,
+    })
+}
+
+pub fn uninstall_automation() -> Result<(), String> {
+    let home = home_dir()?;
+    let domain = launchd_domain()?;
+    for label in [RECORD_LABEL, REMINDER_LABEL] {
+        bootout_agent(&domain, label);
+        remove_file_if_exists(&home.join(format!("Library/LaunchAgents/{label}.plist")))?;
+    }
+    remove_file_if_exists(&home.join(".local/bin/wake-clock"))?;
+    Ok(())
+}
+
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("failed to remove {}: {error}", path.display())),
+    }
+}
+
+fn launchd_domain() -> Result<String, String> {
+    let output = Command::new("/usr/bin/id")
+        .arg("-u")
+        .output()
+        .map_err(error_string)?;
+    if !output.status.success() {
+        return Err("failed to determine the current user id".into());
+    }
+    Ok(format!(
+        "gui/{}",
+        String::from_utf8_lossy(&output.stdout).trim()
+    ))
+}
+
+fn reload_agent(domain: &str, label: &str, plist: &Path) -> Result<(), String> {
+    bootout_agent(domain, label);
+    let status = Command::new("/bin/launchctl")
+        .args(["bootstrap", domain, plist.to_string_lossy().as_ref()])
+        .status()
+        .map_err(error_string)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to load {} with launchctl ({status})",
+            plist.display()
+        ))
+    }
+}
+
+fn bootout_agent(domain: &str, label: &str) {
+    let service = format!("{domain}/{label}");
+    let _ = Command::new("/bin/launchctl")
+        .args(["bootout", &service])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn record_agent_plist(
+    executable: &Path,
+    home: &Path,
+    data_root: &Path,
+    record_time: NaiveTime,
+) -> String {
+    let calendar = format!(
+        "  <key>StartCalendarInterval</key>\n  <dict>\n    <key>Hour</key>\n    <integer>{}</integer>\n    <key>Minute</key>\n    <integer>{}</integer>\n  </dict>\n  <key>RunAtLoad</key>\n  <true/>",
+        record_time.format("%H"),
+        record_time.format("%M")
+    );
+    launch_agent_plist(
+        RECORD_LABEL,
+        executable,
+        &["record", "--scheduled", "--quiet"],
+        home,
+        data_root,
+        &calendar,
+    )
+}
+
+fn reminder_agent_plist(executable: &Path, home: &Path, data_root: &Path, interval: u64) -> String {
+    let schedule = format!(
+        "  <key>StartInterval</key>\n  <integer>{interval}</integer>\n  <key>RunAtLoad</key>\n  <true/>"
+    );
+    launch_agent_plist(
+        REMINDER_LABEL,
+        executable,
+        &["remind", "--quiet"],
+        home,
+        data_root,
+        &schedule,
+    )
+}
+
+fn launch_agent_plist(
+    label: &str,
+    executable: &Path,
+    arguments: &[&str],
+    home: &Path,
+    data_root: &Path,
+    schedule: &str,
+) -> String {
+    let arguments = arguments
+        .iter()
+        .map(|argument| format!("    <string>{}</string>", xml_escape(argument)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{executable}</string>
+{arguments}
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>{home}</string>
+  </dict>
+{schedule}
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>{data_root}/wake-clock.log</string>
+  <key>StandardErrorPath</key>
+  <string>{data_root}/wake-clock.error.log</string>
+</dict>
+</plist>
+"#,
+        label = xml_escape(label),
+        executable = xml_escape(executable.to_string_lossy().as_ref()),
+        home = xml_escape(home.to_string_lossy().as_ref()),
+        data_root = xml_escape(data_root.to_string_lossy().as_ref()),
+    )
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 fn error_string(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
@@ -393,9 +646,35 @@ fn error_string(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    use std::io::Write;
 
     fn config() -> Config {
         toml::from_str(DEFAULT_CONFIG).unwrap()
+    }
+
+    #[test]
+    fn old_configs_receive_safe_automation_defaults() {
+        let old_config = DEFAULT_CONFIG.split("[automation]").next().unwrap();
+        let config: Config = toml::from_str(old_config).unwrap();
+        assert_eq!(
+            config.automation.daily_record_time,
+            parse_time("14:05").unwrap()
+        );
+        assert_eq!(config.automation.reminder_check_seconds, 60);
+    }
+
+    #[test]
+    fn scheduled_record_only_runs_after_the_configured_time() {
+        let config = config();
+        assert!(!scheduled_record_is_due(
+            parse_time("14:04:59").unwrap(),
+            &config
+        ));
+        assert!(scheduled_record_is_due(
+            parse_time("14:05:00").unwrap(),
+            &config
+        ));
     }
 
     #[test]
@@ -448,5 +727,49 @@ mod tests {
         assert!(!should_remind(&record, parse_time("17:29").unwrap()));
         assert!(should_remind(&record, parse_time("17:30").unwrap()));
         assert!(!should_remind(&record, parse_time("18:00").unwrap()));
+    }
+
+    #[test]
+    fn creates_separate_daily_record_and_reminder_agents() {
+        let config = config();
+        let executable = Path::new("/Users/a&b/.local/bin/wake-clock");
+        let home = Path::new("/Users/a&b");
+        let data = Path::new("/Users/a&b/.local/share/wake-clock");
+        let record =
+            record_agent_plist(executable, home, data, config.automation.daily_record_time);
+        assert!(record.contains("com.weierz.wake-clock.record"));
+        assert!(record.contains("<integer>14</integer>"));
+        assert!(record.contains("<integer>05</integer>"));
+        assert!(record.contains("/Users/a&amp;b/.local/bin/wake-clock"));
+        assert!(record.contains("<string>--scheduled</string>"));
+        assert!(record.contains("<key>RunAtLoad</key>"));
+
+        let reminder = reminder_agent_plist(executable, home, data, 60);
+        assert!(reminder.contains("com.weierz.wake-clock.reminder"));
+        assert!(reminder.contains("<integer>60</integer>"));
+        assert!(reminder.contains("<string>--quiet</string>"));
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_valid_plist(&record);
+            assert_valid_plist(&reminder);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn assert_valid_plist(plist: &str) {
+        let mut child = Command::new("/usr/bin/plutil")
+            .args(["-lint", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(plist.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
     }
 }

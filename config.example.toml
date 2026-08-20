@@ -26,3 +26,11 @@ until = "14:00:00"
 kind = "carry_delay"
 anchor_start = "13:00:00"
 anchor_end = "18:00:00"
+
+[automation]
+# Record once per day, after the display-event search window has ended.
+daily_record_time = "14:05:00"
+
+# Only the lightweight reminder check repeats. It never recalculates or
+# overwrites the daily record.
+reminder_check_seconds = 60
