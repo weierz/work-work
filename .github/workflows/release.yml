@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Verify tag matches package version
+        run: |
+          package_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
+          test "${GITHUB_REF_NAME#v}" = "$package_version"
+      - name: Build macOS binaries
+        run: |
+          cargo build --locked --release --target aarch64-apple-darwin
+          cargo build --locked --release --target x86_64-apple-darwin
+      - name: Package release assets
+        run: |
+          mkdir -p dist
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            package_dir="dist/work-work-$target"
+            mkdir -p "$package_dir"
+            cp "target/$target/release/ww" "$package_dir/ww"
+            cp README.md LICENSE "$package_dir/"
+            tar -czf "dist/work-work-$target.tar.gz" -C "$package_dir" .
+            rm -rf "$package_dir"
+          done
+          cd dist
+          shasum -a 256 work-work-*.tar.gz > checksums.txt
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Work Work $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
