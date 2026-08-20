@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{Local, NaiveTime};
 use std::env;
 use std::process::ExitCode;
 use work_work::{
@@ -72,8 +72,8 @@ fn run() -> Result<(), String> {
             }
         }
         "history" => {
-            let limit = env::args()
-                .nth(2)
+            let limit = args
+                .get(2)
                 .map(|value| value.parse::<usize>())
                 .transpose()
                 .map_err(|_| "history limit must be a positive integer".to_string())?
@@ -83,14 +83,8 @@ fn run() -> Result<(), String> {
                     "{}  on {}  off {}  worked {}{}",
                     record.date,
                     record.wake_time.format("%H:%M:%S"),
-                    record
-                        .display_off_time
-                        .map(|time| time.format("%H:%M:%S").to_string())
-                        .unwrap_or_else(|| "--".into()),
-                    record
-                        .work_minutes
-                        .map(format_minutes)
-                        .unwrap_or_else(|| "--".into()),
+                    format_optional_time(record.display_off_time),
+                    format_optional_minutes(record.work_minutes),
                     if record.reminder_sent {
                         "  reminded"
                     } else {
@@ -133,14 +127,8 @@ fn print_record(record: &work_work::DailyRecord) {
         "{}  on {}  off {}  worked {}  estimated end {}  reminder {}",
         record.date,
         record.wake_time.format("%H:%M:%S"),
-        record
-            .display_off_time
-            .map(|time| time.format("%H:%M:%S").to_string())
-            .unwrap_or_else(|| "--".into()),
-        record
-            .work_minutes
-            .map(format_minutes)
-            .unwrap_or_else(|| "--".into()),
+        format_optional_time(record.display_off_time),
+        format_optional_minutes(record.work_minutes),
         record.estimated_end_time.format("%H:%M:%S"),
         if record.reminder_sent {
             "sent"
@@ -148,6 +136,15 @@ fn print_record(record: &work_work::DailyRecord) {
             "pending"
         }
     );
+}
+
+fn format_optional_time(time: Option<NaiveTime>) -> String {
+    time.map(|value| value.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| "--".into())
+}
+
+fn format_optional_minutes(minutes: Option<i64>) -> String {
+    minutes.map(format_minutes).unwrap_or_else(|| "--".into())
 }
 
 fn print_monthly_report(report: &MonthlyReport) {
