@@ -1,4 +1,4 @@
-use chrono::{Days, Local, NaiveDate, NaiveTime, TimeDelta};
+use chrono::{Days, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -90,14 +90,12 @@ pub struct RuleConfig {
 pub struct AutomationConfig {
     #[serde(deserialize_with = "deserialize_time")]
     pub daily_record_time: NaiveTime,
-    pub reminder_check_seconds: u64,
 }
 
 impl Default for AutomationConfig {
     fn default() -> Self {
         Self {
             daily_record_time: NaiveTime::from_hms_opt(14, 5, 0).unwrap(),
-            reminder_check_seconds: 60,
         }
     }
 }
@@ -217,9 +215,6 @@ fn validate_config(config: &Config) -> Result<(), String> {
     }
     if config.automation.daily_record_time < config.search.end_time {
         return Err("automation.daily_record_time must not be before search.end_time".into());
-    }
-    if config.automation.reminder_check_seconds < 30 {
-        return Err("automation.reminder_check_seconds must be at least 30".into());
     }
     if config
         .schedule
@@ -426,11 +421,24 @@ pub fn should_remind(record: &DailyRecord, now: NaiveTime) -> bool {
     if record.reminder_sent {
         return false;
     }
-    let reminder_time = record
+    now >= reminder_time(record) && now < record.estimated_end_time
+}
+
+pub fn reminder_time(record: &DailyRecord) -> NaiveTime {
+    record
         .estimated_end_time
         .overflowing_sub_signed(TimeDelta::minutes(record.reminder_minutes))
-        .0;
-    now >= reminder_time && now < record.estimated_end_time
+        .0
+}
+
+fn scheduled_reminder_time(record: &DailyRecord) -> NaiveTime {
+    let time = reminder_time(record);
+    if time.second() == 0 {
+        time
+    } else {
+        time.overflowing_add_signed(TimeDelta::seconds(60 - i64::from(time.second())))
+            .0
+    }
 }
 
 pub fn send_notification(record: &DailyRecord) -> Result<(), String> {
@@ -462,13 +470,21 @@ fn escape_applescript(value: &str) -> String {
 pub fn record_today(force: bool) -> Result<DailyRecord, String> {
     let config = load_config()?;
     let now = Local::now();
-    let date = now.date_naive();
+    let log = read_pmset_log()?;
+    record_for_date(now.date_naive(), force, &config, &log)
+}
+
+fn record_for_date(
+    date: NaiveDate,
+    force: bool,
+    config: &Config,
+    log: &str,
+) -> Result<DailyRecord, String> {
     let previous = load_record(date)?;
     if !force && let Some(record) = previous {
         return Ok(record);
     }
-    let log = read_pmset_log()?;
-    let wake_time = select_wake_event(&log, date, &config.search).ok_or_else(|| {
+    let wake_time = select_wake_event(log, date, &config.search).ok_or_else(|| {
         format!(
             "no display-on event found between {} and {} on {date}",
             config.search.start_time, config.search.end_time
@@ -511,10 +527,7 @@ pub fn remind_today() -> Result<ReminderOutcome, String> {
     if now.time() >= record.estimated_end_time {
         return Ok(ReminderOutcome::EndTimePassed);
     }
-    let reminder_time = record
-        .estimated_end_time
-        .overflowing_sub_signed(TimeDelta::minutes(record.reminder_minutes))
-        .0;
+    let reminder_time = reminder_time(&record);
     if now.time() < reminder_time {
         return Ok(ReminderOutcome::NotDue { reminder_time });
     }
@@ -526,45 +539,76 @@ pub fn remind_today() -> Result<ReminderOutcome, String> {
     Ok(ReminderOutcome::Sent)
 }
 
-pub fn run_automation_tick() -> Result<(), String> {
+pub fn run_daily_automation(force: bool) -> Result<DailyRecord, String> {
     let config = load_config()?;
     let now = Local::now();
     let log = read_pmset_log()?;
-    refresh_actual_time_for_date(now.date_naive(), &log, &config)?;
-    if let Some(yesterday) = now.date_naive().checked_sub_days(Days::new(1)) {
-        refresh_actual_time_for_date(yesterday, &log, &config)?;
+    for record in list_records(45)? {
+        if record.date < now.date_naive() {
+            refresh_actual_time_for_date(record.date, &log, &config)?;
+        }
     }
-    let _ = remind_today()?;
-    maybe_send_monthly_summary(now, &config)
+    maybe_send_monthly_summary(now, &config)?;
+    let record = record_for_date(now.date_naive(), force, &config, &log)?;
+    schedule_reminder_if_installed(&record)?;
+    if should_remind(&record, now.time()) {
+        let _ = remind_today()?;
+    }
+    Ok(record)
 }
 
 pub fn run_daemon() -> ! {
     loop {
-        let sleep_seconds = match load_config() {
-            Ok(config) => {
-                let now = Local::now();
-                let date = now.date_naive();
-                match load_record(date) {
-                    Ok(None) if scheduled_record_is_due(now.time(), &config) => {
-                        if let Err(error) = record_today(false) {
-                            eprintln!("Automatic record failed: {error}");
-                        }
-                    }
-                    Err(error) => eprintln!("Could not read today's record: {error}"),
-                    _ => {}
-                }
-                if let Err(error) = run_automation_tick() {
-                    eprintln!("Automatic tick failed: {error}");
-                }
-                config.automation.reminder_check_seconds
-            }
+        let sleep_seconds = match run_daemon_iteration() {
+            Ok(seconds) => seconds,
             Err(error) => {
-                eprintln!("Could not load configuration: {error}");
+                eprintln!("Automatic task failed: {error}");
                 300
             }
         };
         thread::sleep(Duration::from_secs(sleep_seconds));
     }
+}
+
+fn run_daemon_iteration() -> Result<u64, String> {
+    let config = load_config()?;
+    let now = Local::now();
+    let date = now.date_naive();
+    if load_record(date)?.is_none() && scheduled_record_is_due(now.time(), &config) {
+        run_daily_automation(false)?;
+    }
+    let record = load_record(date)?;
+    if record
+        .as_ref()
+        .is_some_and(|record| should_remind(record, now.time()))
+    {
+        let _ = remind_today()?;
+    }
+    Ok(seconds_until_next_action(
+        now.naive_local(),
+        &config,
+        record.as_ref(),
+    ))
+}
+
+fn seconds_until_next_action(
+    now: NaiveDateTime,
+    config: &Config,
+    record: Option<&DailyRecord>,
+) -> u64 {
+    let next_date = if now.time() < config.automation.daily_record_time {
+        now.date()
+    } else {
+        now.date().checked_add_days(Days::new(1)).unwrap()
+    };
+    let mut next = next_date.and_time(config.automation.daily_record_time);
+    if let Some(record) = record.filter(|record| !record.reminder_sent) {
+        let reminder = now.date().and_time(reminder_time(record));
+        if reminder > now && reminder < next {
+            next = reminder;
+        }
+    }
+    next.signed_duration_since(now).num_seconds().max(1) as u64
 }
 
 pub fn list_records(limit: usize) -> Result<Vec<DailyRecord>, String> {
@@ -631,21 +675,16 @@ pub fn install_automation(config: &Config) -> Result<AutomationInstallation, Str
         ),
     )
     .map_err(error_string)?;
-    fs::write(
-        &reminder_agent,
-        reminder_agent_plist(
-            &executable,
-            &home,
-            &data_root,
-            config.automation.reminder_check_seconds,
-        ),
-    )
-    .map_err(error_string)?;
-
     let domain = launchd_domain()?;
-    reload_agent(&domain, RECORD_LABEL, &record_agent)?;
-    if let Err(error) = reload_agent(&domain, REMINDER_LABEL, &reminder_agent) {
-        bootout_agent(&domain, RECORD_LABEL);
+    bootout_agent(&domain, REMINDER_LABEL);
+    remove_file_if_exists(&reminder_agent)?;
+    if let Some(record) = load_record(Local::now().date_naive())?
+        && let Err(error) = schedule_reminder_if_installed(&record)
+    {
+        return Err(error);
+    }
+    if let Err(error) = reload_agent(&domain, RECORD_LABEL, &record_agent) {
+        bootout_agent(&domain, REMINDER_LABEL);
         return Err(error);
     }
 
@@ -654,6 +693,31 @@ pub fn install_automation(config: &Config) -> Result<AutomationInstallation, Str
         record_agent,
         reminder_agent,
     })
+}
+
+pub fn schedule_reminder_if_installed(record: &DailyRecord) -> Result<bool, String> {
+    let home = home_dir()?;
+    let agents_dir = home.join("Library/LaunchAgents");
+    let record_agent = agents_dir.join(format!("{RECORD_LABEL}.plist"));
+    if !record_agent.exists() {
+        return Ok(false);
+    }
+
+    let executable = home.join(".local/bin/ww");
+    let data_root = home.join(".local/share/work-work");
+    let reminder_agent = agents_dir.join(format!("{REMINDER_LABEL}.plist"));
+    fs::write(
+        &reminder_agent,
+        reminder_agent_plist(
+            &executable,
+            &home,
+            &data_root,
+            scheduled_reminder_time(record),
+        ),
+    )
+    .map_err(error_string)?;
+    reload_agent(&launchd_domain()?, REMINDER_LABEL, &reminder_agent)?;
+    Ok(true)
 }
 
 pub fn uninstall_automation() -> Result<(), String> {
@@ -742,14 +806,21 @@ fn record_agent_plist(
     )
 }
 
-fn reminder_agent_plist(executable: &Path, home: &Path, data_root: &Path, interval: u64) -> String {
+fn reminder_agent_plist(
+    executable: &Path,
+    home: &Path,
+    data_root: &Path,
+    reminder_time: NaiveTime,
+) -> String {
     let schedule = format!(
-        "  <key>StartInterval</key>\n  <integer>{interval}</integer>\n  <key>RunAtLoad</key>\n  <true/>"
+        "  <key>StartCalendarInterval</key>\n  <dict>\n    <key>Hour</key>\n    <integer>{}</integer>\n    <key>Minute</key>\n    <integer>{}</integer>\n  </dict>",
+        reminder_time.format("%H"),
+        reminder_time.format("%M")
     );
     launch_agent_plist(
         REMINDER_LABEL,
         executable,
-        &["tick", "--quiet"],
+        &["remind", "--quiet"],
         home,
         data_root,
         &schedule,
@@ -834,7 +905,6 @@ mod tests {
             config.automation.daily_record_time,
             parse_time("14:05").unwrap()
         );
-        assert_eq!(config.automation.reminder_check_seconds, 60);
     }
 
     #[test]
@@ -948,6 +1018,15 @@ mod tests {
         assert!(!should_remind(&record, parse_time("17:49").unwrap()));
         assert!(should_remind(&record, parse_time("17:50").unwrap()));
         assert!(!should_remind(&record, parse_time("18:00").unwrap()));
+
+        let record_with_seconds = DailyRecord {
+            estimated_end_time: parse_time("18:11:27").unwrap(),
+            ..record
+        };
+        assert_eq!(
+            scheduled_reminder_time(&record_with_seconds),
+            parse_time("18:02").unwrap()
+        );
     }
 
     #[test]
@@ -1007,17 +1086,43 @@ mod tests {
         assert!(record.contains("<string>--scheduled</string>"));
         assert!(record.contains("<key>RunAtLoad</key>"));
 
-        let reminder = reminder_agent_plist(executable, home, data, 60);
+        let reminder = reminder_agent_plist(executable, home, data, parse_time("17:50").unwrap());
         assert!(reminder.contains("com.weierz.work-work.reminder"));
-        assert!(reminder.contains("<integer>60</integer>"));
-        assert!(reminder.contains("<string>tick</string>"));
+        assert!(reminder.contains("<integer>17</integer>"));
+        assert!(reminder.contains("<integer>50</integer>"));
+        assert!(reminder.contains("<string>remind</string>"));
         assert!(reminder.contains("<string>--quiet</string>"));
+        assert!(!reminder.contains("StartInterval"));
 
         #[cfg(target_os = "macos")]
         {
             assert_valid_plist(&record);
             assert_valid_plist(&reminder);
         }
+    }
+
+    #[test]
+    fn daemon_sleeps_until_the_next_reminder() {
+        let config = config();
+        let record = DailyRecord {
+            date: NaiveDate::from_ymd_opt(2026, 8, 20).unwrap(),
+            wake_time: parse_time("09:00").unwrap(),
+            estimated_end_time: parse_time("18:00").unwrap(),
+            source: "test".into(),
+            reminder_minutes: 10,
+            reminder_sent: false,
+            reminder_sent_at: None,
+            display_off_time: None,
+            work_minutes: None,
+        };
+        let now = NaiveDate::from_ymd_opt(2026, 8, 20)
+            .unwrap()
+            .and_time(parse_time("17:00").unwrap());
+
+        assert_eq!(
+            seconds_until_next_action(now, &config, Some(&record)),
+            3_000
+        );
     }
 
     #[cfg(target_os = "macos")]

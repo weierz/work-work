@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use work_work::{
     MonthlyReport, ReminderOutcome, ensure_default_config, format_minutes, format_signed_minutes,
     generate_monthly_report, install_automation, list_records, load_config, load_record,
-    parse_month, previous_month, record_today, remind_today, run_automation_tick, run_daemon,
+    parse_month, previous_month, remind_today, run_daemon, run_daily_automation,
     scheduled_record_is_due, uninstall_automation,
 };
 
@@ -42,7 +42,7 @@ fn run() -> Result<(), String> {
                     return Ok(());
                 }
             }
-            let record = record_today(force)?;
+            let record = run_daily_automation(force)?;
             if !quiet {
                 print_record(&record);
             }
@@ -102,7 +102,6 @@ fn run() -> Result<(), String> {
                 .unwrap_or_else(|| previous_month(Local::now().date_naive()));
             print_monthly_report(&generate_monthly_report(month, &config.time_accounting)?);
         }
-        "tick" => run_automation_tick()?,
         "install" => {
             let installation = install_automation(&load_config()?)?;
             println!("Automatic daily recording and reminders are enabled.");

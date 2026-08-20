@@ -18,10 +18,10 @@ No account, server, or manual check-in is required. Everything stays on your Mac
 3. Applies your schedule rules to estimate an end time.
 4. Captures the last display-off event inside your configured end window.
 5. Calculates net work time after subtracting the configured break overlap.
-6. Sends one macOS notification before the estimated end time.
+6. Schedules one macOS notification for the reminder time.
 7. On the 15th, summarizes the previous month and marks unusual days.
 
-By default, Work Work records the day at `14:05` and sends a notification 10 minutes before the estimated end time.
+By default, Work Work records the day at `14:05`, then schedules a notification for 10 minutes before the estimated end time. LaunchAgents use minute precision, so times with seconds are rounded to the following minute. Work Work does not poll in the background.
 
 > [!NOTE]
 > Work Work provides a convenient estimate. It is not an attendance system or an authoritative time tracker.
@@ -132,7 +132,6 @@ See [`config.example.toml`](config.example.toml) for the complete example.
 | `schedule.max_end_time` | Latest allowed estimated end time | `19:00:00` |
 | `schedule.reminder_minutes` | Minutes before the end time to notify | `10` |
 | `automation.daily_record_time` | Time to create the daily record | `14:05:00` |
-| `automation.reminder_check_seconds` | Reminder check interval | `60` |
 
 ### Schedule rules
 
@@ -154,7 +153,7 @@ anchor_start = "13:00:00"
 anchor_end = "18:00:00"
 ```
 
-After changing an automation time or interval for a source installation, reload the LaunchAgents:
+After changing the automation or reminder settings for a source installation, reload the LaunchAgents:
 
 ```bash
 ww install
@@ -171,6 +170,8 @@ last reasonable display-off − first reasonable display-on − overlapping brea
 With the defaults, `09:00–18:00` becomes 8 hours after the `12:00–13:00` break. A day is marked as unusual when it differs from the 8-hour target by at least 60 minutes, or when no reasonable display-off event was found.
 
 On the configured summary day, Work Work sends one notification for the previous month. The monthly balance includes every day that has a daily record. It deliberately does not interpret weekends, public holidays, or leave; unrecorded dates are simply absent, while a recorded date without a display-off event is marked as an anomaly.
+
+The last display-off event is finalized by the following day's record task, so no frequent background check is needed. The package-manager daemon follows the same model and sleeps until the next daily record or reminder time.
 
 ## Data and privacy
 
