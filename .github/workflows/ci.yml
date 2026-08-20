@@ -14,6 +14,8 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Check installer syntax
+        run: zsh -n install.sh
       - name: Check
         run: cargo check --locked
       - name: Test

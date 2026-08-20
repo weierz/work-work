@@ -2,7 +2,7 @@
 
 一个面向 macOS 的 Rust 命令行工具。它从 `pmset -g log` 中读取屏幕亮起事件，估算当天的大致打卡时间和下班时间，并把结果保存为每日 JSON 记录。
 
-当前版本只做 CLI，不会安装或修改 launchd、cron 等系统定时任务。
+安装一次后，工具通过两个独立的 macOS launchd 任务自动工作：每天只计算并写入一次记录；提醒检查不会重新计算或覆盖当天记录。
 
 ## 默认规则
 
@@ -24,39 +24,47 @@
 ```bash
 git clone https://github.com/weierz/screen-wake-clock.git
 cd screen-wake-clock
-cargo install --path .
+./install.sh
 ```
 
-## 使用
+安装脚本会完成编译、安装并立即加载两个用户级 LaunchAgent。用户不需要再执行启动命令，也不需要管理员权限。
 
-建议在候选时间窗结束后每天执行一次记录命令：
+## 日常使用
+
+安装完成后不需要手动执行 `record` 或 `remind`：
+
+- 默认每天 `14:05` 自动读取一次亮屏日志并保存记录。
+- 每 60 秒进行一次轻量提醒检查，只在配置的提醒窗口内发送一次通知。
+- 登录或电脑从关机状态恢复时，如果已经超过当天记录时间，会补做当天记录。
+- 同一天已有记录时不会覆盖，除非明确使用 `--force`。
+
+查看记录：
 
 ```bash
-wake-clock init
-wake-clock record
+wake-clock status
+wake-clock history
+wake-clock history 30
 ```
 
-同一天再次执行 `record` 只返回已有记录，不会覆盖。确认需要重新读取日志时才使用：
+卸载自动任务，但保留配置和历史记录：
 
 ```bash
-wake-clock record --force
+wake-clock uninstall
 ```
 
-其他命令：
+以下命令只用于调试或手动修正：
 
 ```bash
-wake-clock status       # 查看今天的记录
-wake-clock history      # 查看最近 14 条记录
-wake-clock history 30   # 查看最近 30 条记录
-wake-clock remind       # 到提醒窗口时发送一次 macOS 通知
+wake-clock record           # 如果今天没有记录，则立即记录
+wake-clock record --force   # 强制重新计算今天的记录
+wake-clock remind           # 立即检查提醒状态
+wake-clock init             # 创建默认配置
 wake-clock help
 ```
 
-`remind` 与 `record` 完全分离：记录每天运行一次即可；提醒命令可以在后续版本中交给 launchd 定时检查。当前版本不会自动创建任何系统任务。
-
 ## 配置
 
-首次运行 `init` 或 `record` 会创建：
+安装时会自动创建（也可通过 `init` 或 `record` 创建）：
 
 ```text
 ~/.config/wake-clock/config.toml
@@ -69,6 +77,8 @@ wake-clock help
 - `schedule.max_end_time`：最晚下班时间。
 - `schedule.reminder_minutes`：提前多少分钟提醒。
 - `schedule.rules`：按顺序匹配的下班时间规则。
+- `automation.daily_record_time`：每天自动记录时间，应晚于候选时间窗。
+- `automation.reminder_check_seconds`：提醒检查间隔，最小 30 秒。
 
 支持三种规则：
 
@@ -88,12 +98,25 @@ anchor_end = "18:00:00"
 
 规则按配置中的顺序执行，第一条满足 `wake_time <= until` 的规则生效。
 
+修改自动化时间或检查间隔后，重新执行一次：
+
+```bash
+wake-clock install
+```
+
 ## 数据
 
 每日记录保存在：
 
 ```text
 ~/.local/share/wake-clock/records/YYYY-MM-DD.json
+```
+
+后台任务日志位于：
+
+```text
+~/.local/share/wake-clock/wake-clock.log
+~/.local/share/wake-clock/wake-clock.error.log
 ```
 
 示例：
@@ -130,7 +153,7 @@ cargo test --locked
 - 只支持 macOS，因为数据来自系统自带的 `pmset`。
 - 亮屏时间只是近似打卡时间，不等同于考勤系统记录。
 - macOS 可能产生短暂的自动亮屏事件，因此需要合理设置候选时间窗和目标时间。
-- 当前版本提供提醒命令，但不自动配置系统调度。
+- macOS 必须允许 `osascript` 发送通知，否则提醒记录不会标记为已发送。
 
 ## License
 
