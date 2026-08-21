@@ -2,7 +2,7 @@ use chrono::{Days, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timeli
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -558,6 +558,7 @@ pub fn run_daily_automation(force: bool) -> Result<DailyRecord, String> {
 }
 
 pub fn run_daemon() -> ! {
+    thread::spawn(|| watch_display_events());
     loop {
         let sleep_seconds = match run_daemon_iteration() {
             Ok(seconds) => seconds,
@@ -635,12 +636,18 @@ pub fn list_records(limit: usize) -> Result<Vec<DailyRecord>, String> {
 
 const RECORD_LABEL: &str = "com.weierz.work-work.record";
 const REMINDER_LABEL: &str = "com.weierz.work-work.reminder";
+const DISPLAY_LABEL: &str = "com.weierz.work-work.display";
+const DISPLAY_ON_NOTIFICATIONS: [&str; 2] = [
+    "com.apple.screenIsUnlocked",
+    "com.apple.sessionDidBecomeActive",
+];
 
 #[derive(Debug)]
 pub struct AutomationInstallation {
     pub executable: PathBuf,
     pub record_agent: PathBuf,
     pub reminder_agent: PathBuf,
+    pub display_agent: PathBuf,
 }
 
 pub fn install_automation(config: &Config) -> Result<AutomationInstallation, String> {
@@ -664,6 +671,7 @@ pub fn install_automation(config: &Config) -> Result<AutomationInstallation, Str
     fs::create_dir_all(&agents_dir).map_err(error_string)?;
     let record_agent = agents_dir.join(format!("{RECORD_LABEL}.plist"));
     let reminder_agent = agents_dir.join(format!("{REMINDER_LABEL}.plist"));
+    let display_agent = agents_dir.join(format!("{DISPLAY_LABEL}.plist"));
 
     fs::write(
         &record_agent,
@@ -673,6 +681,11 @@ pub fn install_automation(config: &Config) -> Result<AutomationInstallation, Str
             &data_root,
             config.automation.daily_record_time,
         ),
+    )
+    .map_err(error_string)?;
+    fs::write(
+        &display_agent,
+        display_agent_plist(&executable, &home, &data_root),
     )
     .map_err(error_string)?;
     let domain = launchd_domain()?;
@@ -687,11 +700,17 @@ pub fn install_automation(config: &Config) -> Result<AutomationInstallation, Str
         bootout_agent(&domain, REMINDER_LABEL);
         return Err(error);
     }
+    if let Err(error) = reload_agent(&domain, DISPLAY_LABEL, &display_agent) {
+        bootout_agent(&domain, RECORD_LABEL);
+        bootout_agent(&domain, REMINDER_LABEL);
+        return Err(error);
+    }
 
     Ok(AutomationInstallation {
         executable,
         record_agent,
         reminder_agent,
+        display_agent,
     })
 }
 
@@ -723,12 +742,54 @@ pub fn schedule_reminder_if_installed(record: &DailyRecord) -> Result<bool, Stri
 pub fn uninstall_automation() -> Result<(), String> {
     let home = home_dir()?;
     let domain = launchd_domain()?;
-    for label in [RECORD_LABEL, REMINDER_LABEL] {
+    for label in [RECORD_LABEL, REMINDER_LABEL, DISPLAY_LABEL] {
         bootout_agent(&domain, label);
         remove_file_if_exists(&home.join(format!("Library/LaunchAgents/{label}.plist")))?;
     }
     remove_file_if_exists(&home.join(".local/bin/ww"))?;
     Ok(())
+}
+
+pub fn watch_display_events() -> ! {
+    record_if_missing_after_display_on();
+    loop {
+        let mut command = Command::new("/usr/bin/notifyutil");
+        command.arg("-R");
+        for notification in DISPLAY_ON_NOTIFICATIONS {
+            command.args(["-w", notification]);
+        }
+        match command.stdout(Stdio::piped()).spawn() {
+            Ok(mut child) => {
+                if let Some(stdout) = child.stdout.take() {
+                    for line in BufReader::new(stdout).lines() {
+                        match line {
+                            Ok(_) => record_if_missing_after_display_on(),
+                            Err(error) => {
+                                eprintln!("Display event listener failed: {error}");
+                                break;
+                            }
+                        }
+                    }
+                }
+                let _ = child.wait();
+            }
+            Err(error) => eprintln!("Failed to start display event listener: {error}"),
+        }
+        thread::sleep(Duration::from_secs(5));
+    }
+}
+
+fn record_if_missing_after_display_on() {
+    let today = Local::now().date_naive();
+    match load_record(today) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            if let Err(error) = run_daily_automation(false) {
+                eprintln!("Display-on recording skipped: {error}");
+            }
+        }
+        Err(error) => eprintln!("Failed to inspect today's record: {error}"),
+    }
 }
 
 fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
@@ -824,6 +885,17 @@ fn reminder_agent_plist(
         home,
         data_root,
         &schedule,
+    )
+}
+
+fn display_agent_plist(executable: &Path, home: &Path, data_root: &Path) -> String {
+    launch_agent_plist(
+        DISPLAY_LABEL,
+        executable,
+        &["watch"],
+        home,
+        data_root,
+        "  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>",
     )
 }
 
@@ -1094,10 +1166,17 @@ mod tests {
         assert!(reminder.contains("<string>--quiet</string>"));
         assert!(!reminder.contains("StartInterval"));
 
+        let display = display_agent_plist(executable, home, data);
+        assert!(display.contains("com.weierz.work-work.display"));
+        assert!(display.contains("<string>watch</string>"));
+        assert!(display.contains("<key>KeepAlive</key>"));
+        assert!(!display.contains("StartInterval"));
+
         #[cfg(target_os = "macos")]
         {
             assert_valid_plist(&record);
             assert_valid_plist(&reminder);
+            assert_valid_plist(&display);
         }
     }
 

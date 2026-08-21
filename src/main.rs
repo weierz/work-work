@@ -5,7 +5,7 @@ use work_work::{
     MonthlyReport, ReminderOutcome, ensure_default_config, format_minutes, format_signed_minutes,
     generate_monthly_report, install_automation, list_records, load_config, load_record,
     parse_month, previous_month, remind_today, run_daemon, run_daily_automation,
-    scheduled_record_is_due, uninstall_automation,
+    scheduled_record_is_due, uninstall_automation, watch_display_events,
 };
 
 fn main() -> ExitCode {
@@ -22,8 +22,10 @@ fn run() -> Result<(), String> {
     let args = env::args().collect::<Vec<_>>();
     let Some(command) = args.get(1).map(String::as_str) else {
         let today = Local::now().date_naive();
-        let record = load_record(today)?
-            .ok_or_else(|| format!("no record for {today}; automatic recording has not run yet"))?;
+        let record = match load_record(today)? {
+            Some(record) => record,
+            None => run_daily_automation(false)?,
+        };
         println!("{}", record.estimated_end_time.format("%H:%M:%S"));
         return Ok(());
     };
@@ -108,6 +110,7 @@ fn run() -> Result<(), String> {
             println!("Executable: {}", installation.executable.display());
             println!("Record agent: {}", installation.record_agent.display());
             println!("Reminder agent: {}", installation.reminder_agent.display());
+            println!("Display agent: {}", installation.display_agent.display());
         }
         "uninstall" => {
             uninstall_automation()?;
@@ -115,6 +118,7 @@ fn run() -> Result<(), String> {
             println!("Configuration and history were kept.");
         }
         "daemon" => run_daemon(),
+        "watch" => watch_display_events(),
         "help" | "--help" | "-h" => print_help(),
         other => return Err(format!("unknown command `{other}`; run ww help")),
     }

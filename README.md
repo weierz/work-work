@@ -21,7 +21,7 @@ No account, server, or manual check-in is required. Everything stays on your Mac
 6. Schedules one macOS notification for the reminder time.
 7. On the 15th, summarizes the previous month and marks unusual days.
 
-By default, Work Work records the day at `14:05`, then schedules a notification for 10 minutes before the estimated end time. LaunchAgents use minute precision, so times with seconds are rounded to the following minute. Work Work does not poll in the background.
+Work Work records the day when your Mac session becomes active. Running `ww` also creates today's record immediately when one does not exist, while `14:05` remains a fallback. It then schedules a notification for 10 minutes before the estimated end time. The display hook waits for macOS events and does not poll.
 
 > [!NOTE]
 > Work Work provides a convenient estimate. It is not an attendance system or an authoritative time tracker.
@@ -89,7 +89,7 @@ brew uninstall weierz/tap/work-work
 
 ## Everyday use
 
-Once installed, Work Work records and reminds you automatically. You only need the CLI when you want to check something.
+Once installed, Work Work records and reminds you automatically. You only need the CLI when you want to check something. If today's record is missing, plain `ww` creates it immediately from today's existing display events before printing the estimated end time.
 
 ```bash
 ww              # Print only today's estimated end time
@@ -135,7 +135,7 @@ See [`config.example.toml`](config.example.toml) for the complete example.
 | `time_accounting.monthly_summary_day` | Day to summarize the previous month | `15` |
 | `schedule.max_end_time` | Latest allowed estimated end time | `19:00:00` |
 | `schedule.reminder_minutes` | Minutes before the end time to notify | `10` |
-| `automation.daily_record_time` | Time to create the daily record | `14:05:00` |
+| `automation.daily_record_time` | Fallback time to create the daily record | `14:05:00` |
 
 ### Schedule rules
 
@@ -175,7 +175,7 @@ With the defaults, `09:00–18:00` becomes 8 hours after the `12:00–13:00` bre
 
 On the configured summary day, Work Work sends one notification for the previous month. The monthly balance includes every day that has a daily record. It deliberately does not interpret weekends, public holidays, or leave; unrecorded dates are simply absent, while a recorded date without a display-off event is marked as an anomaly.
 
-The last display-off event is finalized by the following day's record task, so no frequent background check is needed. The package-manager daemon follows the same model and sleeps until the next daily record or reminder time.
+The last display-off event is finalized by the following day's record task, so no frequent background check is needed. The display hook blocks until macOS reports that the session became active; it does not wake on an interval.
 
 ## Data and privacy
 

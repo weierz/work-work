@@ -35,7 +35,6 @@ anchor_start = "13:00:00"
 anchor_end = "18:00:00"
 
 [automation]
-# Record once per day, after the display-event search window has ended.
-# This also schedules that day's one-time reminder, finalizes yesterday's
-# display-off time, and sends a due monthly summary.
+# A display-on hook records the day as soon as a reasonable event is available.
+# This fixed time is a fallback and also finalizes previous records.
 daily_record_time = "14:05:00"
